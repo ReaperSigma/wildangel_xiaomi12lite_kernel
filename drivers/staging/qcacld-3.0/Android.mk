@@ -68,9 +68,7 @@ include $(foreach chip, $(TARGET_WLAN_CHIP), $(LOCAL_PATH)/.$(chip)/Android.mk)
 
 else # Multi-ok check
 
-ifeq ($(WLAN_PROFILE),)
 WLAN_PROFILE := default
-endif
 
 ifeq ($(LOCAL_DEV_NAME), qcacld-3.0)
 
@@ -102,9 +100,6 @@ LOCAL_MOD_NAME := $(LOCAL_DEV_NAME)
 endif
 
 endif
-
-# MIUI ADD: always use same target path and only write in factory
-TARGET_MAC_BIN_PATH := /mnt/vendor/persist/wlan
 
 # DLKM_DIR was moved for JELLY_BEAN (PLATFORM_SDK 16)
 ifeq ($(call is-platform-sdk-version-at-least,16),true)

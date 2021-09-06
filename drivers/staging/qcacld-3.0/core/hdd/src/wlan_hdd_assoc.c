@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -85,7 +84,6 @@
 
 #include "wlan_hdd_twt.h"
 #include "wma_api.h"
-#include "wlan_hdd_cfr.h"
 
 /* These are needed to recognize WPA and RSN suite types */
 #define HDD_WPA_OUI_SIZE 4
@@ -470,37 +468,6 @@ void hdd_abort_ongoing_sta_connection(struct hdd_context *hdd_ctx)
 				status);
 		}
 	}
-}
-
-bool hdd_is_any_sta_connected(struct hdd_context *hdd_ctx)
-{
-	struct hdd_adapter *adapter = NULL, *next_adapter = NULL;
-	struct hdd_station_ctx *hdd_sta_ctx;
-	wlan_net_dev_ref_dbgid dbgid =
-				NET_DEV_HOLD_IS_ANY_STA_CONNECTED;
-
-	if (!hdd_ctx) {
-		hdd_err("HDD context is NULL");
-		return false;
-	}
-
-	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter,
-					   dbgid) {
-		hdd_sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
-		if (QDF_STA_MODE == adapter->device_mode ||
-		    QDF_P2P_CLIENT_MODE == adapter->device_mode) {
-			if (eConnectionState_Associated ==
-				   hdd_sta_ctx->conn_info.conn_state) {
-				hdd_adapter_dev_put_debug(adapter, dbgid);
-				if (next_adapter)
-					hdd_adapter_dev_put_debug(next_adapter,
-								  dbgid);
-				return true;
-			}
-		}
-		hdd_adapter_dev_put_debug(adapter, dbgid);
-	}
-	return false;
 }
 
 /**
@@ -903,9 +870,6 @@ static void hdd_copy_ht_operation(struct hdd_station_ctx *hdd_sta_ctx,
 		hdd_ht_ops->operation_mode |=
 			IEEE80211_HT_OP_MODE_NON_HT_STA_PRSNT;
 
-	if (roam_ht_ops->chan_center_freq_seg2)
-		hdd_ht_ops->operation_mode |=
-			(roam_ht_ops->chan_center_freq_seg2 << IEEE80211_HT_OP_MODE_CCFS2_SHIFT);
 	/* stbc_param */
 	temp_ht_ops = roam_ht_ops->basicSTBCMCS &
 			HT_STBC_PARAM_MCS;
@@ -1144,21 +1108,14 @@ static void hdd_save_bss_info(struct hdd_adapter *adapter,
 		hdd_sta_ctx->conn_info.conn_flag.vht_op_present = false;
 	}
 
-	/*
-	 * Cache connection info only in case of station
-	 */
+	/* Cleanup already existing he info */
+	hdd_cleanup_conn_info(adapter);
 
-	if (adapter->device_mode == QDF_STA_MODE) {
-		/* Cleanup already existing he info */
-		hdd_cleanup_conn_info(adapter);
+	/* Cache last connection info */
+	qdf_mem_copy(&hdd_sta_ctx->cache_conn_info, &hdd_sta_ctx->conn_info,
+		     sizeof(hdd_sta_ctx->cache_conn_info));
 
-		/* Cache last connection info */
-		qdf_mem_copy(&hdd_sta_ctx->cache_conn_info,
-			     &hdd_sta_ctx->conn_info,
-			     sizeof(hdd_sta_ctx->cache_conn_info));
-
-		hdd_copy_he_operation(hdd_sta_ctx, roam_info);
-	}
+	hdd_copy_he_operation(hdd_sta_ctx, roam_info);
 }
 
 /**
@@ -1858,78 +1815,53 @@ static void hdd_print_bss_info(struct hdd_station_ctx *hdd_sta_ctx)
 }
 
 /**
- * hdd_cm_set_default_wlm_mode - reset the default wlm mode if
- *				 wlm_latency_reset_on_disconnect is set.
- *@adapter: adapter pointer
+ * hdd_pmkid_clear_on_ap_off() - clear pmkid cache when ap off
+ * @adapter: pointer to adapter
  *
- * return: None.
- */
-static void hdd_cm_set_default_wlm_mode(struct hdd_adapter *adapter)
-{
-	QDF_STATUS status;
-	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
-	bool reset;
-	uint8_t def_level;
-	mac_handle_t mac_handle;
-	uint16_t vdev_id;
-
-	if (!hdd_ctx) {
-		hdd_err("hdd_ctx is NULL");
-		return;
-	}
-
-	status = ucfg_mlme_cfg_get_wlm_reset(hdd_ctx->psoc, &reset);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		hdd_err("could not get wlm reset flag");
-		return;
-	}
-	if (!reset)
-		return;
-
-	status = ucfg_mlme_cfg_get_wlm_level(hdd_ctx->psoc, &def_level);
-	if (QDF_IS_STATUS_ERROR(status))
-		def_level = QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_NORMAL;
-
-	mac_handle = hdd_ctx->mac_handle;
-	vdev_id = adapter->vdev_id;
-
-	status = sme_set_wlm_latency_level(mac_handle, vdev_id, def_level);
-	if (QDF_IS_STATUS_SUCCESS(status)) {
-		hdd_debug("reset wlm mode %x on disconnection", def_level);
-		adapter->latency_level = def_level;
-	} else {
-		hdd_err("reset wlm mode failed: %d", status);
-	}
-}
-
-/**
- * hdd_reset_udp_qos_upgrade_config() - Reset the threshold for UDP packet
- * QoS upgrade.
- * @adapter: adapter for which this configuration is to be applied
+ * In AP side power off/on case, AP security has been cleanup.
+ * The STA side might still cache PMK ID in driver and it will always use
+ * PMK cache to connect to AP and get continuously connect failure in SAE
+ * security. This function is to detect AP off based on FW reported BMISS
+ * event. Meanwhile judge FW reported last RSSI > roaming Low rssi
+ * and not less than 20db of host cached RSSI to avoid some false
+ * alarm such as normal DUT roll in/out roaming.
  *
- * Return: None
+ * Return: void
  */
-static void hdd_reset_udp_qos_upgrade_config(struct hdd_adapter *adapter)
+static void hdd_pmkid_clear_on_ap_off(struct hdd_adapter *adapter)
 {
+	struct hdd_station_ctx *sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
+	int8_t cache_rssi = 0;
+	int32_t bmiss_rssi;
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
-	bool reset;
-	QDF_STATUS status;
+	uint8_t lookup_threshold = 0;
+	struct wlan_crypto_pmksa *pmksa;
 
-	if (!hdd_ctx) {
-		hdd_err("hdd_ctx is NULL");
+	if (sta_ctx->conn_info.auth_type != eCSR_AUTH_TYPE_SAE)
 		return;
-	}
-
-	status = ucfg_mlme_cfg_get_wlm_reset(hdd_ctx->psoc, &reset);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		hdd_err("could not get the wlm reset flag");
+	hdd_get_rssi_snr_by_bssid(adapter, sta_ctx->conn_info.bssid.bytes,
+				  &cache_rssi, NULL);
+	sme_get_neighbor_lookup_rssi_threshold(hdd_ctx->mac_handle,
+					       adapter->vdev_id,
+					       &lookup_threshold);
+	bmiss_rssi = adapter->rssi_on_disconnect;
+	if (!bmiss_rssi || !lookup_threshold || !cache_rssi)
 		return;
-	}
-
-	if (reset) {
-		adapter->upgrade_udp_qos_threshold = QCA_WLAN_AC_BK;
-		hdd_debug("UDP packets qos upgrade to: %d",
-			  adapter->upgrade_udp_qos_threshold);
+	hdd_nofl_debug("sta bmiss on rssi %d scan rssi %d th %d", bmiss_rssi,
+		       cache_rssi, lookup_threshold);
+	if (bmiss_rssi > (lookup_threshold * (-1))) {
+		if (bmiss_rssi + AP_OFF_RSSI_OFFSET > cache_rssi) {
+			pmksa = qdf_mem_malloc(sizeof(*pmksa));
+			if (!pmksa)
+				return;
+			qdf_mem_copy(pmksa->bssid.bytes,
+				     sta_ctx->conn_info.bssid.bytes,
+				     sizeof(tSirMacAddr));
+			sme_roam_del_pmkid_from_cache(hdd_ctx->mac_handle,
+						      adapter->vdev_id,
+						      pmksa, false);
+			qdf_mem_free(pmksa);
+		}
 	}
 }
 
@@ -1984,8 +1916,6 @@ static QDF_STATUS hdd_dis_connect_handler(struct hdd_adapter *adapter,
 				  WLAN_IPA_STA_DISCONNECT,
 				  sta_ctx->conn_info.bssid.bytes);
 
-	hdd_cm_set_default_wlm_mode(adapter);
-	hdd_reset_udp_qos_upgrade_config(adapter);
 	hdd_periodic_sta_stats_stop(adapter);
 
 #ifdef FEATURE_WLAN_AUTO_SHUTDOWN
@@ -2020,7 +1950,7 @@ static QDF_STATUS hdd_dis_connect_handler(struct hdd_adapter *adapter,
 		hdd_conn_set_connection_state(adapter,
 					      eConnectionState_Disconnecting);
 	}
-	hdd_clear_roam_profile_ie(adapter);
+
 	hdd_wmm_dscp_initial_state(adapter);
 	wlan_deregister_txrx_packetdump(OL_TXRX_PDEV_ID);
 
@@ -2061,10 +1991,15 @@ static QDF_STATUS hdd_dis_connect_handler(struct hdd_adapter *adapter,
 						disconnect_ies.data,
 						disconnect_ies.len);
 	}
+	if (adapter->device_mode == QDF_STA_MODE &&
+	    roam_status == eCSR_ROAM_LOSTLINK &&
+	    reason_code == REASON_BEACON_MISSED)
+		hdd_pmkid_clear_on_ap_off(adapter);
 
+	hdd_clear_roam_profile_ie(adapter);
 	/* update P2P connection status */
 	ucfg_p2p_status_disconnect(adapter->vdev);
-	hdd_cfr_disconnect(adapter->vdev);
+
 	if (adapter->device_mode == QDF_STA_MODE) {
 		/* Inform BLM about the disconnection with the AP */
 		ucfg_blm_update_bssid_connect_params(hdd_ctx->pdev,
@@ -2900,30 +2835,6 @@ void hdd_clear_fils_connection_info(struct hdd_adapter *adapter)
 #endif
 
 /**
- * hdd_netif_features_update_required() - Check if feature update
- * is required
- * @adapter: pointer to the adapter structure
- * Returns: true if the connection is legacy and TSO and Checksum offload
- * enabled or if the connection is not latency and TSO and Checksum
- * offload are not enabled, false otherwise
- */
-static bool hdd_netif_features_update_required(struct hdd_adapter *adapter)
-{
-	bool is_legacy_connection = hdd_is_legacy_connection(adapter);
-
-	hdd_debug("Legacy Connection: %d, TSO_CSUM Feature Enabled:%d",
-		  is_legacy_connection, adapter->tso_csum_feature_enabled);
-
-	if (adapter->tso_csum_feature_enabled  && is_legacy_connection)
-		return true;
-
-	if (!adapter->tso_csum_feature_enabled  && !is_legacy_connection)
-		return true;
-
-	return false;
-}
-
-/**
  * hdd_netif_queue_enable() - Enable the network queue for a
  *			      particular adapter.
  * @adapter: pointer to the adapter structure
@@ -2940,17 +2851,17 @@ static inline void hdd_netif_queue_enable(struct hdd_adapter *adapter)
 	ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 
-	if (cdp_cfg_get(soc, cfg_dp_disable_legacy_mode_csum_offload) &&
-	    hdd_netif_features_update_required(adapter)) {
+	if (cdp_cfg_get(soc, cfg_dp_disable_legacy_mode_csum_offload)) {
 		hdd_adapter_ops_record_event(hdd_ctx,
 					     WLAN_HDD_ADAPTER_OPS_WORK_POST,
 					     adapter->vdev_id);
 		qdf_queue_work(0, hdd_ctx->adapter_ops_wq,
 			       &adapter->netdev_features_update_work);
+	} else {
+		wlan_hdd_netif_queue_control(adapter,
+					     WLAN_WAKE_ALL_NETIF_QUEUE,
+					     WLAN_CONTROL_PATH);
 	}
-	wlan_hdd_netif_queue_control(adapter,
-				     WLAN_WAKE_ALL_NETIF_QUEUE,
-				     WLAN_CONTROL_PATH);
 }
 
 static void hdd_save_connect_status(struct hdd_adapter *adapter,
@@ -3087,6 +2998,15 @@ hdd_association_completion_handler(struct hdd_adapter *adapter,
 				     ie_len);
 			hdd_debug("ap_supports_immediate_power_save flag [%d]",
 				  sta_ctx->ap_supports_immediate_power_save);
+		}
+
+		/* Indicate 'connect' status to user space */
+		hdd_send_association_event(dev, roam_info);
+
+		if (policy_mgr_is_mcc_in_24G(hdd_ctx->psoc)) {
+			if (hdd_ctx->miracast_value)
+				wlan_hdd_set_mas(adapter,
+					hdd_ctx->miracast_value);
 		}
 
 		/* Initialize the Linkup event completion variable */
@@ -3284,33 +3204,6 @@ hdd_association_completion_handler(struct hdd_adapter *adapter,
 				assoc_req_len = 0;
 			}
 
-			if (!hddDisconInProgress) {
-				/*
-				 * Perform any WMM-related association
-				 * processing.
-				 */
-				hdd_wmm_assoc(adapter, roam_info,
-					      eCSR_BSS_TYPE_INFRASTRUCTURE);
-
-				/*
-				 * Register the Station with DP after associated
-				 */
-				qdf_status = hdd_roam_register_sta(adapter,
-						roam_info,
-						roam_info->bss_desc);
-				hdd_debug("Enabling queues");
-				hdd_netif_queue_enable(adapter);
-			}
-
-			/* Indicate 'connect' status to user space */
-			hdd_send_association_event(dev, roam_info);
-
-			if (policy_mgr_is_mcc_in_24G(hdd_ctx->psoc)) {
-				if (hdd_ctx->miracast_value)
-					wlan_hdd_set_mas(adapter,
-						hdd_ctx->miracast_value);
-			}
-
 			if ((roam_info->u.pConnectedProfile->AuthType ==
 			     eCSR_AUTH_TYPE_FT_RSN) ||
 			    (roam_info->u.pConnectedProfile->AuthType ==
@@ -3452,10 +3345,38 @@ hdd_association_completion_handler(struct hdd_adapter *adapter,
 							       conn_info_freq);
 				}
 			}
+			if (!hddDisconInProgress) {
+				/*
+				 * Perform any WMM-related association
+				 * processing.
+				 */
+				hdd_wmm_assoc(adapter, roam_info,
+					      eCSR_BSS_TYPE_INFRASTRUCTURE);
+
+				/*
+				 * Register the Station with DP after associated
+				 */
+				qdf_status = hdd_roam_register_sta(adapter,
+						roam_info,
+						roam_info->bss_desc);
+				hdd_debug("Enabling queues");
+				hdd_netif_queue_enable(adapter);
+			}
 		} else {
+			/*
+			 * wpa supplicant expecting WPA/RSN IE in connect result
+			 * in case of reassociation also need to indicate it to
+			 * supplicant.
+			 */
+			sme_roam_get_wpa_rsn_req_ie(
+						mac_handle,
+						adapter->vdev_id,
+						&reqRsnLength, reqRsnIe);
+
 			cdp_hl_fc_set_td_limit(soc, adapter->vdev_id,
 					       conn_info_freq);
-
+			hdd_send_re_assoc_event(dev, adapter, roam_info,
+						reqRsnIe, reqRsnLength);
 			/* Reassoc successfully */
 			if (roam_info->fAuthRequired) {
 				qdf_status =
@@ -3493,30 +3414,7 @@ hdd_association_completion_handler(struct hdd_adapter *adapter,
 			/* Start the tx queues */
 			hdd_debug("Enabling queues");
 			hdd_netif_queue_enable(adapter);
-
-			/* Indicate 'connect' status to user space */
-			hdd_send_association_event(dev, roam_info);
-
-			if (policy_mgr_is_mcc_in_24G(hdd_ctx->psoc)) {
-				if (hdd_ctx->miracast_value)
-					wlan_hdd_set_mas(adapter,
-						hdd_ctx->miracast_value);
-			}
-
-			/*
-			 * wpa supplicant expecting WPA/RSN IE in connect result
-			 * in case of reassociation also need to indicate it to
-			 * supplicant.
-			 */
-			sme_roam_get_wpa_rsn_req_ie(
-						mac_handle,
-						adapter->vdev_id,
-						&reqRsnLength, reqRsnIe);
-
-			hdd_send_re_assoc_event(dev, adapter, roam_info,
-						reqRsnIe, reqRsnLength);
 		}
-
 		qdf_mem_free(reqRsnIe);
 
 		if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {

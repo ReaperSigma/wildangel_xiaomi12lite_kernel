@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1227,8 +1226,6 @@ int wmi_twt_del_status_to_vendor_twt_status(enum WMI_HOST_DEL_TWT_STATUS status)
 		return QCA_WLAN_VENDOR_TWT_STATUS_CHANNEL_SWITCH_IN_PROGRESS;
 	case WMI_HOST_DEL_TWT_STATUS_SCAN_IN_PROGRESS:
 		return QCA_WLAN_VENDOR_TWT_STATUS_SCAN_IN_PROGRESS;
-	case WMI_HOST_DEL_TWT_STATUS_PS_DISABLE_TEARDOWN:
-		return QCA_WLAN_VENDOR_TWT_STATUS_POWER_SAVE_EXIT_TERMINATE;
 	default:
 		return QCA_WLAN_VENDOR_TWT_STATUS_UNKNOWN_ERROR;
 	}
@@ -1817,13 +1814,6 @@ static int hdd_twt_setup_session(struct hdd_adapter *adapter,
 					     qca_wlan_vendor_twt_add_dialog_policy);
 	if (ret)
 		return ret;
-
-	if (!ucfg_mlme_get_twt_peer_responder_capabilities(
-					adapter->hdd_ctx->psoc,
-					&hdd_sta_ctx->conn_info.bssid)) {
-		hdd_err_rl("TWT setup reject: TWT responder not supported");
-		return -EOPNOTSUPP;
-	}
 
 	ret = hdd_twt_get_add_dialog_values(tb2, &params);
 	if (ret)
@@ -3134,7 +3124,7 @@ hdd_send_twt_resume_dialog_cmd(struct hdd_context *hdd_ctx,
 			break;
 		case WMI_HOST_RESUME_TWT_STATUS_DIALOG_ID_NOT_EXIST:
 		case WMI_HOST_RESUME_TWT_STATUS_NOT_PAUSED:
-			ret = -EAGAIN;
+			ret = EAGAIN;
 			break;
 		case WMI_HOST_RESUME_TWT_STATUS_DIALOG_ID_BUSY:
 			ret = -EINPROGRESS;
@@ -4021,11 +4011,6 @@ void hdd_update_tgt_twt_cap(struct hdd_context *hdd_ctx,
 		  cfg->legacy_bcast_twt_support);
 
 	/*
-	 * Set the twt fw responder service capability
-	 */
-	ucfg_mlme_set_twt_res_service_cap(hdd_ctx->psoc,
-					  services->twt_responder);
-	/*
 	 * The HE cap IE in frame will have intersection of
 	 * "enable_twt" ini, twt requestor fw service cap and
 	 * "twt_requestor" ini requestor bit after this
@@ -4447,8 +4432,6 @@ void __hdd_twt_update_work_handler(struct hdd_context *hdd_ctx)
 	hdd_debug("Total connection %d, sta_count %d, sap_count %d",
 		  num_connections, sta_count, sap_count);
 	switch (num_connections) {
-	case 0:
-		break;
 	case 1:
 		if (sta_count == 1) {
 			hdd_send_twt_requestor_enable_cmd(hdd_ctx);
@@ -4492,7 +4475,7 @@ void __hdd_twt_update_work_handler(struct hdd_context *hdd_ctx)
 					WLAN_HDD_ID_OBJ_MGR);
 		break;
 	default:
-		hdd_debug("Unexpected number of connection");
+		hdd_err("Unexpected number of connection");
 		break;
 	}
 }
@@ -4515,27 +4498,6 @@ void hdd_twt_update_work_handler(void *data)
 void wlan_twt_concurrency_update(struct hdd_context *hdd_ctx)
 {
 	qdf_sched_work(0, &hdd_ctx->twt_en_dis_work);
-}
-
-void hdd_twt_del_dialog_in_ps_disable(struct hdd_context *hdd_ctx,
-				      struct qdf_mac_addr *mac_addr,
-				      uint8_t vdev_id)
-{
-	struct wmi_twt_del_dialog_param params = {0};
-	int ret;
-
-	params.dialog_id = WLAN_ALL_SESSIONS_DIALOG_ID;
-	params.vdev_id = vdev_id;
-	qdf_mem_copy(params.peer_macaddr, mac_addr->bytes, QDF_MAC_ADDR_SIZE);
-
-	if (ucfg_mlme_is_twt_setup_done(hdd_ctx->psoc, mac_addr,
-					params.dialog_id)) {
-		hdd_debug("vdev%d: Terminate existing TWT session %d due to ps disable",
-			  params.vdev_id, params.dialog_id);
-		ret = hdd_send_twt_del_dialog_cmd(hdd_ctx, &params);
-		if (ret)
-			hdd_debug("TWT teardown is failed on vdev: %d", vdev_id);
-	}
 }
 
 void wlan_hdd_twt_init(struct hdd_context *hdd_ctx)

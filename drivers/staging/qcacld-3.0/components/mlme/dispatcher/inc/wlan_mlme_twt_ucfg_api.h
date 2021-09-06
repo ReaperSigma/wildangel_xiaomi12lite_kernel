@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -219,25 +218,6 @@ QDF_STATUS ucfg_mlme_set_twt_requestor_flag(struct wlan_objmgr_psoc *psoc,
  */
 QDF_STATUS ucfg_mlme_set_twt_responder_flag(struct wlan_objmgr_psoc *psoc,
 					    bool val);
-/**
- * ucfg_mlme_set_twt_res_service_cap() - Set twt responder service capability
- * @psoc: pointer to psoc object
- * @val: Value to be set to config
- *
- * Return: QDF Status
- */
-QDF_STATUS
-ucfg_mlme_set_twt_res_service_cap(struct wlan_objmgr_psoc *psoc, bool val);
-
-/**
- * ucfg_mlme_get_twt_res_service_cap() - Get twt responder service capability
- * @psoc: pointer to psoc object
- * @val: Value to be set to config
- *
- * Return: QDF Status
- */
-QDF_STATUS
-ucfg_mlme_get_twt_res_service_cap(struct wlan_objmgr_psoc *psoc, bool *val);
 
 /**
  * ucfg_mlme_reset_twt_active_cmd() - Reset twt active cmd if ack fail
@@ -382,18 +362,6 @@ uint8_t ucfg_mlme_get_twt_peer_capabilities(struct wlan_objmgr_psoc *psoc,
 {
 	return mlme_get_twt_peer_capabilities(psoc, peer_mac);
 }
-
-/**
- * ucfg_mlme_get_twt_peer_responder_capabilities() - Get peer responder
- * capabilities
- * @psoc: Pointer to global psoc object
- * @peer_mac: Pointer to peer mac address
- *
- * Return: Return True if peer responder capabilities support else False
- */
-bool ucfg_mlme_get_twt_peer_responder_capabilities(
-						struct wlan_objmgr_psoc *psoc,
-						struct qdf_mac_addr *peer_mac);
 
 /**
  * ucfg_mlme_init_twt_context() - Initialize TWT context
@@ -692,14 +660,6 @@ uint8_t ucfg_mlme_get_twt_peer_capabilities(struct wlan_objmgr_psoc *psoc,
 }
 
 static inline
-bool ucfg_mlme_get_twt_peer_responder_capabilities(
-						struct wlan_objmgr_psoc *psoc,
-						struct qdf_mac_addr *peer_mac)
-{
-	return false;
-}
-
-static inline
 QDF_STATUS ucfg_mlme_init_twt_context(struct wlan_objmgr_psoc *psoc,
 				      struct qdf_mac_addr *peer_mac,
 				      uint8_t dialog_id)
@@ -772,19 +732,6 @@ ucfg_mlme_reset_twt_active_cmd(struct wlan_objmgr_psoc *psoc,
 			       struct qdf_mac_addr *peer_mac,
 			       uint8_t dialog_id)
 {
-	return QDF_STATUS_E_NOSUPPORT;
-}
-
-static inline QDF_STATUS
-ucfg_mlme_set_twt_res_service_cap(struct wlan_objmgr_psoc *psoc, bool val)
-{
-	return QDF_STATUS_E_NOSUPPORT;
-}
-
-static inline QDF_STATUS
-ucfg_mlme_get_twt_res_service_cap(struct wlan_objmgr_psoc *psoc, bool *val)
-{
-	*val = false;
 	return QDF_STATUS_E_NOSUPPORT;
 }
 

@@ -205,6 +205,7 @@ struct hdd_config {
 	uint32_t rx_thread_affinity_mask;
 	uint8_t cpu_map_list[CFG_DP_RPS_RX_QUEUE_CPU_MAP_LIST_LEN];
 	bool multicast_replay_filter;
+	uint32_t rx_wakelock_timeout;
 	uint8_t num_dp_rx_threads;
 #ifdef CONFIG_DP_TRACE
 	bool enable_dp_trace;
@@ -279,11 +280,6 @@ struct hdd_config {
 eCsrRoamWmmUserModeType hdd_to_csr_wmm_mode(uint8_t mode);
 
 QDF_STATUS hdd_update_mac_config(struct hdd_context *hdd_ctx);
-#ifdef MOTO_UTAGS_MAC
-QDF_STATUS hdd_update_mac_serial(struct hdd_context *hdd_ctx);
-QDF_STATUS hdd_generate_random_mac_from_serialno(char *serialNo,
-                     int serialength, char *computedMac);
-#endif
 QDF_STATUS hdd_set_sme_config(struct hdd_context *hdd_ctx);
 QDF_STATUS hdd_set_policy_mgr_user_cfg(struct hdd_context *hdd_ctx);
 QDF_STATUS hdd_set_sme_chan_list(struct hdd_context *hdd_ctx);
