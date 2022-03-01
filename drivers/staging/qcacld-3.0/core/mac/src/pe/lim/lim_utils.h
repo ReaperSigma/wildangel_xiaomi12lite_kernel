@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -246,6 +247,19 @@ void lim_send_sme_mgmt_frame_ind(struct mac_context *mac_ctx, uint8_t frame_type
  * Return: None
  */
 void lim_deactivate_timers(struct mac_context *mac_ctx);
+
+/*
+ * lim_deactivate_timers_for_vdev() - Deactivate lim connection timers
+ * @mac_ctx: Pointer to global mac structure
+ * @vdev_id: vdev id
+ *
+ * This function is used to trigger timeout of lim connection timers to abort
+ * connect request.
+ *
+ * Return: None
+ */
+void lim_deactivate_timers_for_vdev(struct mac_context *mac_ctx,
+				    uint8_t vdev_id);
 
 /*
  * The below 'product' check tobe removed if 'Association' is
@@ -2228,4 +2242,19 @@ void lim_process_tpe_ie_from_beacon(struct mac_context *mac,
  * Return: void
  */
 void lim_send_conc_params_update(void);
+
+#ifdef WLAN_FEATURE_SAE
+/**
+ * lim_process_sae_msg() - Process SAE message
+ * @mac: Global MAC pointer
+ * @body: Buffer pointer
+ *
+ * Return: None
+ */
+void lim_process_sae_msg(struct mac_context *mac, struct sir_sae_msg *body);
+#else
+static inline void lim_process_sae_msg(struct mac_context *mac, void *body);
+{}
+#endif
+
 #endif /* __LIM_UTILS_H */

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -491,6 +492,68 @@ void lim_deactivate_timers(struct mac_context *mac_ctx)
 	}
 
 	tx_timer_deactivate(&lim_timer->sae_auth_timer);
+}
+
+void lim_deactivate_timers_for_vdev(struct mac_context *mac_ctx,
+				    uint8_t vdev_id)
+{
+	tLimTimers *lim_timer = &mac_ctx->lim.lim_timers;
+	struct pe_session *pe_session;
+
+	pe_session = pe_find_session_by_vdev_id(mac_ctx, vdev_id);
+	if (!pe_session) {
+		pe_err("pe session invalid for vdev %d", vdev_id);
+		return;
+	}
+	pe_debug("pe limMlmState %s vdev %d",
+		 lim_mlm_state_str(pe_session->limMlmState),
+		 vdev_id);
+	switch (pe_session->limMlmState) {
+	case eLIM_MLM_WT_JOIN_BEACON_STATE:
+		if (tx_timer_running(
+				&lim_timer->gLimJoinFailureTimer)) {
+			pe_debug("Trigger Join failure timeout for vdev %d",
+				 vdev_id);
+			tx_timer_deactivate(
+				&lim_timer->gLimJoinFailureTimer);
+			lim_process_join_failure_timeout(mac_ctx);
+		}
+		break;
+	case eLIM_MLM_WT_AUTH_FRAME2_STATE:
+	case eLIM_MLM_WT_AUTH_FRAME4_STATE:
+		if (tx_timer_running(
+				&lim_timer->gLimAuthFailureTimer)) {
+			pe_debug("Trigger Auth failure timeout for vdev %d",
+				 vdev_id);
+			tx_timer_deactivate(
+				&lim_timer->gLimAuthFailureTimer);
+			lim_process_auth_failure_timeout(mac_ctx);
+
+		}
+		break;
+	case eLIM_MLM_WT_ASSOC_RSP_STATE:
+		if (tx_timer_running(
+				&lim_timer->gLimAssocFailureTimer)) {
+			pe_debug("Trigger Assoc failure timeout for vdev %d",
+				 vdev_id);
+			tx_timer_deactivate(
+				&lim_timer->gLimAssocFailureTimer);
+			lim_process_assoc_failure_timeout(mac_ctx,
+							  LIM_ASSOC);
+		}
+		break;
+	case eLIM_MLM_WT_SAE_AUTH_STATE:
+		if (tx_timer_running(&lim_timer->sae_auth_timer)) {
+			pe_debug("Trigger SAE Auth failure timeout for vdev %d",
+				 vdev_id);
+			tx_timer_deactivate(
+				&lim_timer->sae_auth_timer);
+			lim_process_sae_auth_timeout(mac_ctx);
+		}
+		break;
+	default:
+		return;
+	}
 }
 
 
@@ -5393,6 +5456,9 @@ void lim_send_conc_params_update(void)
 	uint8_t i;
 	struct mac_context *mac = cds_get_context(QDF_MODULE_ID_PE);
 
+	if (!mac)
+		return;
+
 	if (!mac->mlme_cfg->edca_params.enable_edca_params ||
 	    (policy_mgr_get_connection_count(mac->psoc) >
 	     MAX_NUMBER_OF_SINGLE_PORT_CONC_CONNECTIONS)) {
@@ -7301,7 +7367,6 @@ void lim_decide_he_op(struct mac_context *mac_ctx, uint32_t *mlme_he_ops,
 	he_ops.twt_required = he_ops_from_ie->twt_required;
 	he_ops.txop_rts_threshold = he_ops_from_ie->txop_rts_threshold;
 	he_ops.partial_bss_col = he_ops_from_ie->partial_bss_col;
-	he_ops.bss_col_disabled = he_ops_from_ie->bss_col_disabled;
 
 	val = mac_ctx->mlme_cfg->he_caps.he_ops_basic_mcs_nss;
 

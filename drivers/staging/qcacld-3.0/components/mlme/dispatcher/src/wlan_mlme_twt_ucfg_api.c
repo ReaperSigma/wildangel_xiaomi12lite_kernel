@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -259,6 +260,20 @@ ucfg_mlme_set_twt_nudge_tgt_cap(struct wlan_objmgr_psoc *psoc, bool val)
 	return QDF_STATUS_SUCCESS;
 }
 
+bool ucfg_mlme_get_twt_peer_responder_capabilities(
+					struct wlan_objmgr_psoc *psoc,
+					struct qdf_mac_addr *peer_mac)
+{
+	uint8_t peer_cap;
+
+	peer_cap = mlme_get_twt_peer_capabilities(psoc, peer_mac);
+
+	if (peer_cap & WLAN_TWT_CAPA_RESPONDER)
+		return true;
+
+	return false;
+}
+
 QDF_STATUS
 ucfg_mlme_get_twt_nudge_tgt_cap(struct wlan_objmgr_psoc *psoc, bool *val)
 {
@@ -328,4 +343,33 @@ ucfg_mlme_get_twt_statistics_tgt_cap(struct wlan_objmgr_psoc *psoc, bool *val)
 
 	return QDF_STATUS_SUCCESS;
 }
+
+QDF_STATUS
+ucfg_mlme_set_twt_res_service_cap(struct wlan_objmgr_psoc *psoc, bool val)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj)
+		return QDF_STATUS_E_INVAL;
+
+	mlme_obj->cfg.twt_cfg.twt_res_svc_cap = val;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+ucfg_mlme_get_twt_res_service_cap(struct wlan_objmgr_psoc *psoc, bool *val)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj)
+		return QDF_STATUS_E_INVAL;
+
+	*val = mlme_obj->cfg.twt_cfg.twt_res_svc_cap;
+
+	return QDF_STATUS_SUCCESS;
+}
+
 #endif
