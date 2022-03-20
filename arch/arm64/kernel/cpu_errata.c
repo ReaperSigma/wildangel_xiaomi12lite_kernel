@@ -172,10 +172,7 @@ static void install_bp_hardening_cb(bp_hardening_cb_t fn,
 
 	__this_cpu_write(bp_hardening_data.hyp_vectors_slot, slot);
 	__this_cpu_write(bp_hardening_data.fn, fn);
-<<<<<<< HEAD
 	__this_cpu_write(bp_hardening_data.template_start, hyp_vecs_start);
-=======
->>>>>>> parent of 18864ebf5bf7 (Merge tag 'v5.4.228')
 	raw_spin_unlock(&bp_lock);
 }
 #else
@@ -1070,7 +1067,6 @@ ssize_t cpu_show_spec_store_bypass(struct device *dev,
 
 	return sprintf(buf, "Vulnerable\n");
 }
-<<<<<<< HEAD
 
 /*
  * We try to ensure that the mitigation state can never change as the result of
@@ -1401,5 +1397,3 @@ void noinstr spectre_bhb_patch_loop_iter(struct alt_instr *alt,
 					 AARCH64_INSN_MOVEWIDE_ZERO);
 	*updptr++ = cpu_to_le32(insn);
 }
-=======
->>>>>>> parent of 18864ebf5bf7 (Merge tag 'v5.4.228')
