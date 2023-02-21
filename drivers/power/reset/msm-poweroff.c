@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/delay.h>
@@ -19,7 +19,6 @@
 #include <linux/of_address.h>
 #include <linux/qcom_scm.h>
 #include <linux/nvmem-consumer.h>
-#include <linux/syscore_ops.h>
 
 #include <asm/cacheflush.h>
 #include <asm/system_misc.h>
@@ -47,7 +46,7 @@
 #define KASLR_OFFSET_BIT_MASK	0x00000000FFFFFFFF
 
 static int restart_mode;
-static void __iomem *restart_reason, *dload_type_addr;
+static void *restart_reason, *dload_type_addr;
 /* Download mode master kill-switch */
 static void __iomem *msm_ps_hold;
 static phys_addr_t tcsr_boot_misc_detect;
@@ -61,11 +60,11 @@ static struct nvmem_cell *nvmem_cell;
 static int download_mode = 1;
 static struct kobject dload_kobj;
 
-static int in_panic;
-static int dload_type = SCM_DLOAD_FULLDUMP;
-static void __iomem *dload_mode_addr;
+static int in_panic = 0;
+static int dload_type = SCM_DLOAD_BOTHDUMPS;
+static void *dload_mode_addr;
 static bool dload_mode_enabled;
-static void __iomem *emergency_dload_mode_addr;
+static void *emergency_dload_mode_addr;
 
 static bool force_warm_reboot;
 
@@ -203,9 +202,6 @@ static int dload_set(const char *val, const struct kernel_param *kp)
 
 	set_dload_mode(download_mode);
 
-	if (!download_mode)
-		qcom_scm_disable_sdi();
-
 	return 0;
 }
 
@@ -215,13 +211,13 @@ static void free_dload_mode_mem(void)
 	iounmap(dload_mode_addr);
 }
 
-static void __iomem *map_prop_mem(const char *propname)
+static void *map_prop_mem(const char *propname)
 {
 	struct device_node *np = of_find_compatible_node(NULL, NULL, propname);
-	void __iomem *addr;
+	void *addr;
 
 	if (!np) {
-		pr_warn("Unable to find DT property: %s\n", propname);
+		pr_err("Unable to find DT property: %s\n", propname);
 		return NULL;
 	}
 
@@ -233,7 +229,7 @@ static void __iomem *map_prop_mem(const char *propname)
 }
 
 #ifdef CONFIG_RANDOMIZE_BASE
-static void __iomem *kaslr_imem_addr;
+static void *kaslr_imem_addr;
 static void store_kaslr_offset(void)
 {
 	kaslr_imem_addr = map_prop_mem(KASLR_OFFSET_PROP);
@@ -245,6 +241,7 @@ static void store_kaslr_offset(void)
 		__raw_writel(KASLR_OFFSET_BIT_MASK &
 			((kimage_vaddr - KIMAGE_VADDR) >> 32),
 			kaslr_imem_addr + 8);
+		iounmap(kaslr_imem_addr);
 	}
 }
 #else
@@ -252,25 +249,6 @@ static void store_kaslr_offset(void)
 {
 }
 #endif /* CONFIG_RANDOMIZE_BASE */
-
-#if defined(CONFIG_RANDOMIZE_BASE) && defined(CONFIG_HIBERNATION)
-static void msm_poweroff_syscore_resume(void)
-{
-#define KASLR_OFFSET_BIT_MASK      0x00000000FFFFFFFF
-	if (kaslr_imem_addr) {
-		__raw_writel(0xdead4ead, kaslr_imem_addr);
-		__raw_writel(KASLR_OFFSET_BIT_MASK &
-			(kimage_vaddr - KIMAGE_VADDR), kaslr_imem_addr + 4);
-		__raw_writel(KASLR_OFFSET_BIT_MASK &
-			((kimage_vaddr - KIMAGE_VADDR) >> 32),
-				kaslr_imem_addr + 8);
-	}
-}
-
-static struct syscore_ops msm_poweroff_syscore_ops = {
-	.resume = msm_poweroff_syscore_resume,
-};
-#endif
 
 static void setup_dload_mode_support(void)
 {
@@ -283,9 +261,6 @@ static void setup_dload_mode_support(void)
 	emergency_dload_mode_addr = map_prop_mem(EDL_MODE_PROP);
 
 	store_kaslr_offset();
-#if defined(CONFIG_RANDOMIZE_BASE) && defined(CONFIG_HIBERNATION)
-	register_syscore_ops(&msm_poweroff_syscore_ops);
-#endif
 
 	dload_type_addr = map_prop_mem(IMEM_DL_TYPE_PROP);
 	if (!dload_type_addr)
@@ -420,27 +395,6 @@ void msm_set_restart_mode(int mode)
 }
 EXPORT_SYMBOL(msm_set_restart_mode);
 
-static u8 silent_restart(const char *cmd)
-{
-	u8 reason = PON_RESTART_REASON_NON_SILENT;
-
-	if (!strncmp(cmd, "forcedsilent", 12)) {
-		reason = PON_RESTART_REASON_FORCED_SILENT;
-		__raw_writel(0x7766550c, restart_reason);
-	} else if (!strncmp(cmd, "forcednonsilent", 15)) {
-		reason = PON_RESTART_REASON_FORCED_NON_SILENT;
-		__raw_writel(0x7766550d, restart_reason);
-	} else if (!strncmp(cmd, "nonsilent", 9)) {
-		reason = PON_RESTART_REASON_NON_SILENT;
-		__raw_writel(0x7766550b, restart_reason);
-	} else if (!strncmp(cmd, "silent", 6)) {
-		reason = PON_RESTART_REASON_SILENT;
-		__raw_writel(0x7766550a, restart_reason);
-	}
-
-	return reason;
-
-}
 
 static void msm_restart_prepare(const char *cmd)
 {
@@ -509,8 +463,6 @@ static void msm_restart_prepare(const char *cmd)
 					     restart_reason);
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
-		} else if (!strnstr(cmd, "silent", 6)) {
-			reason = silent_restart(cmd);
 		} else {
 			reason = PON_RESTART_REASON_NORMAL;
 			__raw_writel(0x77665501, restart_reason);
@@ -631,10 +583,6 @@ static int msm_restart_probe(struct platform_device *pdev)
 
 err_restart_reason:
 	free_dload_mode_mem();
-#ifdef CONFIG_RANDOMIZE_BASE
-	iounmap(kaslr_imem_addr);
-#endif
-
 	return ret;
 }
 
