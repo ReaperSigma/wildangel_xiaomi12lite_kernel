@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s:%s " fmt, KBUILD_MODNAME, __func__
@@ -119,7 +118,6 @@ struct bcl_peripheral_data {
 	int                     last_val;
 	struct mutex            state_trans_lock;
 	bool			irq_enabled;
-	bool			irq_freed;
 	enum bcl_dev_type	type;
 	struct thermal_zone_of_device_ops ops;
 	struct thermal_zone_device *tz_dev;
@@ -209,9 +207,11 @@ static void convert_ibat_to_adc_val(int *val, int scaling_factor)
 	if (ibat_use_qg_adc)
 		*val = (int)div_s64(*val * 2000 * 2, scaling_factor);
 	else if (no_bit_shift)
-		*val = (int)div_s64(*val * 1000, scaling_factor);
+		*val = (int)div_s64(*val * 1000 * bcl_ibat_ext_ranges[BCL_IBAT_RANGE_LVL0],
+				scaling_factor);
 	else
-		*val = (int)div_s64(*val * 2000, scaling_factor);
+		*val = (int)div_s64(*val * 2000 * bcl_ibat_ext_ranges[BCL_IBAT_RANGE_LVL0],
+				scaling_factor);
 
 }
 
@@ -221,7 +221,8 @@ static void convert_adc_to_ibat_val(int *val, int scaling_factor)
 	if (ibat_use_qg_adc)
 		*val = (int)div_s64(*val * scaling_factor, 2 * 1000);
 	else
-		*val = (int)div_s64(*val * scaling_factor, 1000);
+		*val = (int)div_s64(*val * scaling_factor,
+				1000 * bcl_ibat_ext_ranges[BCL_IBAT_RANGE_LVL0]);
 }
 
 static int8_t convert_ibat_to_ccm_val(int ibat)
@@ -264,9 +265,11 @@ static int bcl_set_ibat(void *data, int low, int high)
 
 	ibat_ua = thresh_value;
 	if (bat_data->dev->ibat_ccm_enabled)
-		convert_ibat_to_adc_val(&thresh_value, BCL_IBAT_CCM_SCALING_UA);
+		convert_ibat_to_adc_val(&thresh_value,
+				BCL_IBAT_CCM_SCALING_UA * bat_data->dev->ibat_ext_range_factor);
 	else
-		convert_ibat_to_adc_val(&thresh_value, BCL_IBAT_SCALING_UA);
+		convert_ibat_to_adc_val(&thresh_value,
+				BCL_IBAT_SCALING_UA * bat_data->dev->ibat_ext_range_factor);
 	val = (int8_t)thresh_value;
 	switch (bat_data->type) {
 	case BCL_IBAT_LVL0:
@@ -321,9 +324,11 @@ static int bcl_read_ibat(void *data, int *adc_value)
 		*adc_value = bat_data->last_val;
 	} else {
 		if (bat_data->dev->ibat_ccm_enabled)
-			convert_adc_to_ibat_val(adc_value, BCL_IBAT_CCM_SCALING_UA);
+			convert_adc_to_ibat_val(adc_value,
+				BCL_IBAT_CCM_SCALING_UA * bat_data->dev->ibat_ext_range_factor);
 		else
-			convert_adc_to_ibat_val(adc_value, BCL_IBAT_SCALING_UA);
+			convert_adc_to_ibat_val(adc_value,
+				BCL_IBAT_SCALING_UA * bat_data->dev->ibat_ext_range_factor);
 		bat_data->last_val = *adc_value;
 	}
 	pr_debug("ibat:%d mA ADC:0x%02x\n", bat_data->last_val, val);
@@ -437,9 +442,6 @@ static int bcl_set_lbat(void *data, int low, int high)
 {
 	struct bcl_peripheral_data *bat_data =
 		(struct bcl_peripheral_data *)data;
-
-	if (bat_data->irq_freed)
-		return 0;
 
 	mutex_lock(&bat_data->state_trans_lock);
 
@@ -833,66 +835,36 @@ static int bcl_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int bcl_freeze(struct device *dev)
+static void bcl_shutdown(struct platform_device *pdev)
 {
-	struct bcl_device *bcl_perph = dev_get_drvdata(dev);
-	int i;
-	struct bcl_peripheral_data *bcl_data;
+	int ret;
+	int data = 0;
+        struct bcl_device *bcl_perph =
+                (struct bcl_device *)dev_get_drvdata(&pdev->dev);
 
-	for (i = 0; i < ARRAY_SIZE(bcl_int_names); i++) {
-		bcl_data = &bcl_perph->param[i];
+	ret = bcl_read_register(bcl_perph, BCL_MONITOR_EN, &data);
+	printk(KERN_ERR "befor set data is %d", data);
+	if (ret)
+		return;
+	data = (data & 0x7F);
+	ret = bcl_write_register(bcl_perph, BCL_MONITOR_EN, data);
 
-		mutex_lock(&bcl_data->state_trans_lock);
-		if (bcl_data->irq_num > 0 && bcl_data->irq_enabled) {
-			disable_irq(bcl_data->irq_num);
-			bcl_data->irq_enabled = false;
-		}
-		devm_free_irq(dev, bcl_data->irq_num, bcl_data);
-		bcl_data->irq_freed = true;
-		mutex_unlock(&bcl_data->state_trans_lock);
-	}
-	return 0;
+	printk(KERN_ERR "after set data is %d", data);
+	if (ret)
+		return;
+
+	ret = bcl_read_register(bcl_perph, BCL_MONITOR_EN_TEMP, &data);
+	printk(KERN_ERR "befor set temp_data is %d", data);
+	if (ret)
+		return;
+	data = (data & 0x00);
+	data = (data | 0x05);
+	ret = bcl_write_register(bcl_perph, BCL_MONITOR_EN_TEMP, data);
+
+	printk(KERN_ERR "after set temp_data is %d", data);
+	if (ret)
+		return;
 }
-
-static int bcl_restore(struct device *dev)
-{
-	struct bcl_device *bcl_perph = dev_get_drvdata(dev);
-	struct bcl_peripheral_data *bcl_data;
-	int ret = 0, i;
-
-	for (i = 0; i < ARRAY_SIZE(bcl_int_names); i++) {
-		bcl_data = &bcl_perph->param[i];
-		mutex_lock(&bcl_data->state_trans_lock);
-		if (bcl_data->irq_num > 0 && !bcl_data->irq_enabled) {
-			ret = devm_request_threaded_irq(dev,
-					bcl_data->irq_num, NULL, bcl_handle_irq,
-					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
-					bcl_int_names[i], bcl_data);
-			if (ret) {
-				dev_err(dev,
-					"Error requesting trip irq. err:%d\n",
-					ret);
-				mutex_unlock(&bcl_data->state_trans_lock);
-				return -EINVAL;
-			}
-			disable_irq_nosync(bcl_data->irq_num);
-			bcl_data->irq_freed = false;
-		}
-		mutex_unlock(&bcl_data->state_trans_lock);
-
-		if (bcl_data->tz_dev)
-			thermal_zone_device_update(bcl_data->tz_dev, THERMAL_DEVICE_UP);
-	}
-	bcl_configure_bcl_peripheral(bcl_perph);
-
-	return 0;
-}
-
-
-static const struct dev_pm_ops bcl_pm_ops = {
-	.freeze = bcl_freeze,
-	.restore = bcl_restore,
-};
 
 static const struct of_device_id bcl_match[] = {
 	{
@@ -907,7 +879,6 @@ static struct platform_driver bcl_driver = {
 	.shutdown = bcl_shutdown,
 	.driver = {
 		.name           = BCL_DRIVER_NAME,
-		.pm = &bcl_pm_ops,
 		.of_match_table = bcl_match,
 	},
 };
