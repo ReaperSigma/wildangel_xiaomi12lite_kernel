@@ -138,7 +138,6 @@ struct f_cdev {
 	unsigned long		nbytes_from_port_bridge;
 
 	struct dentry		*debugfs_root;
-	bool			setup_pending;
 
 	/* To test remote wakeup using debugfs */
 	u8 debugfs_rw_enable;
@@ -359,28 +358,21 @@ static inline struct f_cdev *cser_to_port(struct cserial *cser)
 	return container_of(cser, struct f_cdev, port_usb);
 }
 
-static unsigned int convert_uart_sigs_to_acm(struct cserial *cser, unsigned int uart_sig)
+static unsigned int convert_uart_sigs_to_acm(unsigned int uart_sig)
 {
-	u16 state;
-
-	state = cser->serial_state;
-
-	/* Make sure that ACM bits from previous conversion are cleared */
-	state &= ~(ACM_CTRL_RI | ACM_CTRL_DCD | ACM_CTRL_DSR | ACM_CTRL_BRK);
+	unsigned int acm_sig = 0;
 
 	/* should this needs to be in calling functions ??? */
-	uart_sig &= (TIOCM_RI | TIOCM_CD | TIOCM_DSR | TIOCM_CTS);
+	uart_sig &= (TIOCM_RI | TIOCM_CD | TIOCM_DSR);
 
 	if (uart_sig & TIOCM_RI)
-		state |= ACM_CTRL_RI;
+		acm_sig |= ACM_CTRL_RI;
 	if (uart_sig & TIOCM_CD)
-		state |= ACM_CTRL_DCD;
+		acm_sig |= ACM_CTRL_DCD;
 	if (uart_sig & TIOCM_DSR)
-		state |= ACM_CTRL_DSR;
-	if (uart_sig & TIOCM_CTS)
-		state |= ACM_CTRL_BRK;
+		acm_sig |= ACM_CTRL_DSR;
 
-	return state;
+	return acm_sig;
 }
 
 static unsigned int convert_acm_sigs_to_uart(unsigned int acm_sig)
@@ -549,7 +541,6 @@ static int usb_cser_set_alt(struct usb_function *f, unsigned int intf,
 }
 
 static int port_notify_serial_state(struct cserial *cser);
-static void usb_cser_start_rx(struct f_cdev *port);
 
 static void usb_cser_resume(struct usb_function *f)
 {
@@ -568,13 +559,6 @@ static void usb_cser_resume(struct usb_function *f)
 		port_notify_serial_state(&port->port_usb);
 
 	spin_lock_irqsave(&port->port_lock, flags);
-
-	/* process pending read request */
-	if (port->setup_pending) {
-		pr_info("%s: start_rx called due to rx_out error.\n", __func__);
-		port->setup_pending = false;
-		usb_cser_start_rx(port);
-	}
 	in = port->port_usb.in;
 	/* process any pending requests */
 	list_for_each_entry_safe(req, t, &port->write_pending, list) {
@@ -619,11 +603,11 @@ static int usb_cser_func_suspend(struct usb_function *f, u8 options)
 		if (!port->func_is_suspended) {
 			usb_cser_suspend(f);
 			port->func_is_suspended = true;
-		}
-	} else {
-		if (port->func_is_suspended) {
-			port->func_is_suspended = false;
-			usb_cser_resume(f);
+		} else {
+			if (port->func_is_suspended) {
+				port->func_is_suspended = false;
+				usb_cser_resume(f);
+			}
 		}
 	}
 	return 0;
@@ -1064,10 +1048,7 @@ static void usb_cser_start_rx(struct f_cdev *port)
 			pr_err("port(%d):%pK usb ep(%s) queue failed\n",
 					port->port_num, port, ep->name);
 			list_add(&req->list, pool);
-			port->setup_pending = true;
 			break;
-		} else {
-			port->setup_pending = false;
 		}
 	}
 
@@ -1679,7 +1660,7 @@ static void usb_cser_notify_modem(void *fport, int ctrl_bits)
 		unsigned int cbits_to_laptop;
 
 		result = f_cdev_tiocmget(port);
-		cbits_to_laptop = convert_uart_sigs_to_acm(cser, result);
+		cbits_to_laptop = convert_uart_sigs_to_acm(result);
 		if (cser->send_modem_ctrl_bits)
 			cser->send_modem_ctrl_bits(cser, cbits_to_laptop);
 	}

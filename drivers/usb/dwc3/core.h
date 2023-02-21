@@ -171,7 +171,6 @@
 #define GEN2_U3_EXIT_RSP_RX_CLK_MASK	GEN2_U3_EXIT_RSP_RX_CLK(0xff)
 #define GEN1_U3_EXIT_RSP_RX_CLK(n)	(n)
 #define GEN1_U3_EXIT_RSP_RX_CLK_MASK	GEN1_U3_EXIT_RSP_RX_CLK(0xff)
-#define DWC3_LLUCTL(n)			(0xd024 + ((n) * 0x80))
 #define DWC31_LINK_GDBGLTSSM(n)		(0xd050 + ((n) * 0x80))
 
 /* DWC 3.1 Tx De-emphasis Registers */
@@ -315,7 +314,6 @@
 
 /* Global USB2 PHY Vendor Control Register */
 #define DWC3_GUSB2PHYACC_NEWREGREQ	BIT(25)
-#define DWC3_GUSB2PHYACC_DONE		BIT(24)
 #define DWC3_GUSB2PHYACC_BUSY		BIT(23)
 #define DWC3_GUSB2PHYACC_WRITE		BIT(22)
 #define DWC3_GUSB2PHYACC_ADDR(n)	(n << 16)
@@ -414,7 +412,6 @@
 #define DWC3_GUCTL2_RST_ACTBITLATER		BIT(14)
 
 /* Global User Control Register 3 */
-#define DWC3_GUCTL3_USB20_RETRY_DISABLE		BIT(16)
 #define DWC3_GUCTL3_SPLITDISABLE		BIT(14)
 
 /* Device Configuration Register */
@@ -656,9 +653,6 @@
 #define DWC_CTRL_COUNT	10
 #define NUM_LOG_PAGES	12
 
-/* Force Gen1 speed on Gen2 link*/
-#define DWC3_FORCE_GEN1			BIT(10)
-
 /* Structures */
 
 struct dwc3_trb;
@@ -742,7 +736,6 @@ struct dwc3_ep_events {
  * @desc: usb_endpoint_descriptor pointer
  * @dwc: pointer to DWC controller
  * @saved_state: ep state saved during hibernation
- * @missed_isoc_packets: counter for missed packets sent
  * @flags: endpoint flags (wedged, stalled, ...)
  * @number: endpoint number (1 - 15)
  * @type: set to bmAttributes & USB_ENDPOINT_XFERTYPE_MASK
@@ -776,7 +769,6 @@ struct dwc3_ep {
 	struct dwc3		*dwc;
 
 	u32			saved_state;
-	u32			missed_isoc_packets;
 	unsigned		flags;
 #define DWC3_EP_ENABLED		BIT(0)
 #define DWC3_EP_STALL		BIT(1)
@@ -1074,10 +1066,10 @@ struct dwc3_scratchpad_array {
  * @role_sw: usb_role_switch handle
  * @role_switch_default_mode: default operation mode of controller while
  *			usb role is USB_ROLE_NONE.
- * @usb2_phy: array of pointers to USB2 PHYs
- * @usb3_phy: array of pointers to USB3 PHYs
- * @num_hsphy: Number of HS ports controlled by the core
- * @num_dsphy: Number of SS ports controlled by the core
+ * @usb2_phy: pointer to USB2 PHY 0
+ * @usb2_phy1: pointer to USB2 PHY 1
+ * @usb3_phy: pointer to USB3 PHY 0
+ * @usb3_phy: pointer to USB3 PHY 1
  * @usb2_generic_phy: pointer to USB2 PHY
  * @usb3_generic_phy: pointer to USB3 PHY
  * @phys_ready: flag to indicate that PHYs are ready
@@ -1182,10 +1174,7 @@ struct dwc3_scratchpad_array {
  * @is_remote_wakeup_enabled: remote wakeup status from host perspective
  * @wait_linkstate: waitqueue for waiting LINK to move into required state
  * @remote_wakeup_work: use to perform remote wakeup from this context
- * @force_gen1: use to force gen1 speed on gen2 controller
- * @active_highbw_isoc: if true, high bandwidth isochronous endpoint is active.
- * @ignore_statusirq: if true, ignore irq triggered for status stage.
- * @num_gsi_eps: number of GSI based hardware accelerated endpoints
+ * @dual_port: If true, this core supports two ports
  */
 struct dwc3 {
 	struct work_struct	drd_work;
@@ -1219,10 +1208,8 @@ struct dwc3 {
 
 	struct reset_control	*reset;
 
-	struct usb_phy		**usb2_phy;
-	struct usb_phy		**usb3_phy;
-	u32			num_hsphy;
-	u32			num_ssphy;
+	struct usb_phy		*usb2_phy, *usb2_phy1;
+	struct usb_phy		*usb3_phy, *usb3_phy1;
 
 	struct phy		*usb2_generic_phy;
 	struct phy		*usb3_generic_phy;
@@ -1309,7 +1296,6 @@ struct dwc3 {
 #define DWC31_VERSIONTYPE_EA04		0x65613034
 #define DWC31_VERSIONTYPE_EA05		0x65613035
 #define DWC31_VERSIONTYPE_EA06		0x65613036
-#define DWC31_VERSIONTYPE_GA		0x67612a2a
 
 	enum dwc3_ep0_next	ep0_next_event;
 	enum dwc3_ep0_state	ep0state;
@@ -1338,7 +1324,6 @@ struct dwc3 {
 	u8			rx_max_burst_prd;
 	u8			tx_thr_num_pkt_prd;
 	u8			tx_max_burst_prd;
-	u8			clear_stall_protocol;
 
 	const char		*hsphy_interface;
 
@@ -1384,7 +1369,6 @@ struct dwc3 {
 	unsigned		tx_de_emphasis:2;
 	unsigned		err_evt_seen:1;
 	unsigned		enable_bus_suspend:1;
-	unsigned		force_gen1:1;
 
 	atomic_t		in_lpm;
 	bool			b_suspend;
@@ -1445,9 +1429,11 @@ struct dwc3 {
 	bool			is_remote_wakeup_enabled;
 	wait_queue_head_t	wait_linkstate;
 	struct work_struct	remote_wakeup_work;
-	bool			active_highbw_isoc;
-	bool			ignore_statusirq;
-	u32			num_gsi_eps;
+	bool			dual_port;
+#ifndef CONFIG_FACTORY_BUILD
+	struct work_struct 	check_cmd_work;
+	int			gs_cmd_status;
+#endif
 };
 
 #define INCRX_BURST_MODE 0

@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _F_GSI_H
@@ -25,7 +24,6 @@
 #include "configfs.h"
 
 #define GSI_RMNET_CTRL_NAME "rmnet_ctrl"
-#define GSI_RMNET_V2X_CTRL_NAME "rmnet_v2x_ctrl"
 #define GSI_MBIM_CTRL_NAME "android_mbim"
 #define GSI_DPL_CTRL_NAME "dpl_ctrl"
 #define GSI_GPS_CTRL_NAME "gps"
@@ -323,7 +321,6 @@ struct f_gsi {
 	u8 debugfs_rw_timer_enable;
 	u16 gsi_rw_timer_interval;
 	bool host_supports_flow_control;
-	bool ipa_ready_timeout;
 };
 
 static inline struct f_gsi *func_to_gsi(struct usb_function *f)
@@ -369,8 +366,6 @@ static enum ipa_usb_teth_prot name_to_prot_id(const char *name)
 		return IPA_USB_RNDIS;
 	if (!strncasecmp(name, "ecm", strlen("ecm")))
 		return IPA_USB_ECM;
-	if (!strncasecmp(name, "rmnet.v2x", strlen("rmnet.v2x")))
-		return IPA_USB_RMNET_CV2X;
 	if (!strncasecmp(name, "rmnet", strlen("rmnet")))
 		return IPA_USB_RMNET;
 	if (!strncasecmp(name, "mbim", strlen("mbim")))
