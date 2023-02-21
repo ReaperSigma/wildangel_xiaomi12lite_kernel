@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __QBG_CORE_H__
@@ -13,6 +14,12 @@
 		else						\
 			pr_debug(fmt, ##__VA_ARGS__);	\
 	} while (0)
+
+/*
+ * Current QBG context dump size is 2448 bytes (612 u32 members).
+ * Use greater buffer to accommodate future additions to QBG context.
+ */
+#define QBG_CONTEXT_LOCAL_BUF_SIZE	3072
 
 enum debug_mask {
 	QBG_DEBUG_BUS_READ	= BIT(0),
@@ -73,9 +80,11 @@ enum QBG_ACCUM_INTERVAL_TYPE {
  * @qbg_cdev:		Member for QBG char device
  * @dev_no:		Device number for QBG char device
  * @batt_node:		Pointer to battery device node
+ * @dfs_root:		Pointer to QBG debug fs root directory
  * @indio_dev:		Pointer to QBG IIO device
  * @iio_chan:		Pointer to QBG IIO channels
  * @sdam:		Pointer to multiple QBG SDAMs
+ * @skip_esr_state:	Pointer to nvmem_cell
  * @fifo:		QBG FIFO data
  * @essential_params:	QBG essential params
  * @status_change_work:	Power supply status change work
@@ -87,6 +96,7 @@ enum QBG_ACCUM_INTERVAL_TYPE {
  * @step_chg_jeita_params:	Jeita step charge parameters structure
  * @fifo_lock:		Lock for reading FIFO data
  * @data_lock:		Lock for reading kdata from QBG char device
+ * @context_lock:	Lock for reading/writing QBG context
  * @batt_id_chan:	IIO channel to read battery ID
  * @batt_temp_chan:	IIO channel to read battery temperature
  * @rtc:		RTC device to read real time
@@ -95,6 +105,7 @@ enum QBG_ACCUM_INTERVAL_TYPE {
  * @irq_name:		QBG interrupt name
  * @batt_type_str:	String array denoting battery type
  * @irq:		QBG irq number
+ * @context:		Pointer to QBG context dump buffer
  * @base:		Base address of QBG HW
  * @num_data_sdams:	Number of data sdams used for QBG
  * @batt_id_ohm:	Battery resistance in ohms
@@ -102,6 +113,8 @@ enum QBG_ACCUM_INTERVAL_TYPE {
  * @essential_param_revid:	QBG essential parameters revision ID
  * @sample_time_us:	Array of accumulator sample time in each QBG HW state
  * @debug_mask:		Debug mask to enable/disable debug prints
+ * @adc_cmn_wb_base:	Base address of ADC_CMN_WB module
+ * @adc_cmn_base:	Base address of ADC_CMN module
  * @pon_ocv:		Power-on OCV of QBG device
  * @pon_ibat:		Power-on current of QBG device
  * @pon_soc:		Power-on SOC of QBG device
@@ -129,24 +142,32 @@ enum QBG_ACCUM_INTERVAL_TYPE {
  * @rconn_mohm:	Battery connector resistance
  * @previous_ep_time:	Previous timestamp when essential params stored
  * @current_time:	Current time stamp
+ * @rated_capacity	rated capacity of battery
+ * @context_count:	Size of the last QBG context dump stored
  * @profile_loaded:	Flag to indicated battery profile is loaded
  * @battery_missing:	Flag to indicate battery is missing
  * @data_ready:		Flag to indicate QBG data is ready
  * @in_fast_char:	Flag to indicate QBG is in fast char mode
+ * @enable_fifo_depth_half	Flag to indicate QBG fifo reduce half
  */
 struct qti_qbg {
 	struct device		*dev;
 	struct regmap		*regmap;
 	struct power_supply	*qbg_psy;
 	struct power_supply	*batt_psy;
-	struct class		*qbg_class;
+	struct power_supply	*usb_psy;
+	struct class		qbg_class;
 	struct device		*qbg_device;
 	struct cdev		qbg_cdev;
 	dev_t			dev_no;
 	struct device_node      *batt_node;
+	struct dentry		*dfs_root;
 	struct iio_dev		*indio_dev;
 	struct iio_chan_spec	*iio_chan;
 	struct nvmem_device	**sdam;
+	struct nvmem_cell       *debug_mask_nvmem_low;
+	struct nvmem_cell       *debug_mask_nvmem_high;
+	struct nvmem_cell	*skip_esr_state;
 	struct fifo_data	fifo[MAX_FIFO_COUNT];
 	struct qbg_essential_params	essential_params;
 	struct work_struct	status_change_work;
@@ -158,22 +179,30 @@ struct qti_qbg {
 	struct qbg_step_chg_jeita_params	*step_chg_jeita_params;
 	struct mutex		fifo_lock;
 	struct mutex		data_lock;
+	struct mutex		context_lock;
 	struct iio_channel	*batt_id_chan;
 	struct iio_channel	*batt_temp_chan;
+	struct iio_channel	**ext_iio_chans;
 	struct rtc_device	*rtc;
+	struct wakeup_source    *qbg_ws;
 	ktime_t			last_fast_char_time;
 	wait_queue_head_t	qbg_wait_q;
 	const char		*irq_name;
 	const char		*batt_type_str;
 	int			irq;
+	u8			*context;
 	u32			base;
+	u32			rev4;
 	u32			sdam_base;
 	u32			num_data_sdams;
+	u32			max_fifo_count;
 	u32			batt_id_ohm;
 	u32			sdam_batt_id;
 	u32			essential_param_revid;
 	u32			sample_time_us[QBG_STATE_MAX];
 	u32			*debug_mask;
+	u32			adc_cmn_wb_base;
+	u32			adc_cmn_base;
 	int			pon_ocv;
 	int			pon_ibat;
 	int			pon_tbat;
@@ -193,6 +222,15 @@ struct qti_qbg {
 	int			tte;
 	int			soh;
 	int			charge_type;
+	int			charge_status;
+	int			charger_present;
+	bool			charge_done;
+	bool			charge_full;
+	bool			in_recharge;
+	int			recharge_soc;
+	int			recharge_vflt_delta_mv;
+	int			recharge_iterm_ma;
+	int			default_iterm_ma;
 	int			float_volt_uv;
 	int			fastchg_curr_ma;
 	int			vbat_cutoff_mv;
@@ -202,9 +240,13 @@ struct qti_qbg {
 	int			rconn_mohm;
 	unsigned long		previous_ep_time;
 	unsigned long		current_time;
+	int			context_count;
+	int			rated_capacity;
 	bool			profile_loaded;
 	bool			battery_missing;
+	bool			battery_unknown;
 	bool			data_ready;
 	bool			in_fast_char;
+	bool			enable_fifo_depth_half;
 };
 #endif /* __QBG_CORE_H__ */

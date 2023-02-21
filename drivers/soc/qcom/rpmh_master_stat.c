@@ -2,6 +2,7 @@
 
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "%s: " fmt, KBUILD_MODNAME
@@ -36,6 +37,7 @@ enum master_smem_id {
 	DISPLAY,
 	SLPI_ISLAND = 613,
 	APSS = 631,
+	RPM = 635,
 };
 
 enum master_pid {
@@ -44,6 +46,7 @@ enum master_pid {
 	PID_ADSP = 2,
 	PID_SLPI = 3,
 	PID_CDSP = 5,
+	PID_RPM = 6,
 	PID_WPSS = 13,
 	PID_GPU = PID_APSS,
 	PID_DISPLAY = PID_APSS,
@@ -74,14 +77,7 @@ static const struct msm_rpmh_master_data rpmh_masters[] = {
 	{"SLPI_ISLAND", SLPI_ISLAND, PID_SLPI},
 	{"GPU", GPU, PID_GPU},
 	{"DISPLAY", DISPLAY, PID_DISPLAY},
-};
-
-struct msm_rpmh_master_stats {
-	uint32_t version_id;
-	uint32_t counts;
-	uint64_t last_entered;
-	uint64_t last_exited;
-	uint64_t accumulated_duration;
+	{"DEEP", RPM, PID_RPM},
 };
 
 struct msm_rpmh_profile_unit {
@@ -210,6 +206,12 @@ void msm_rpmh_master_stats_update(void)
 }
 EXPORT_SYMBOL(msm_rpmh_master_stats_update);
 
+struct msm_rpmh_master_stats *msm_rpmh_get_apss_data(void)
+{
+	return &apss_master_stats;
+}
+EXPORT_SYMBOL(msm_rpmh_get_apss_data);
+
 static int msm_rpmh_master_stats_probe(struct platform_device *pdev)
 {
 	struct rpmh_master_stats_prv_data *prvdata = NULL;
@@ -244,9 +246,10 @@ static int msm_rpmh_master_stats_probe(struct platform_device *pdev)
 	if (!rpmh_unit_base) {
 		pr_err("Failed to get rpmh_unit_base or rpm based target\n");
 		rpmh_unit_base = NULL;
+	} else {
+		apss_master_stats.version_id = 0x1;
 	}
 
-	apss_master_stats.version_id = 0x1;
 	platform_set_drvdata(pdev, prvdata);
 
 	return ret;

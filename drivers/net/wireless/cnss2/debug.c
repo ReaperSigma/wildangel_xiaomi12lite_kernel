@@ -10,6 +10,7 @@
 #include "pci.h"
 
 #define MMIO_REG_ACCESS_MEM_TYPE		0xFF
+#define MMIO_REG_RAW_ACCESS_MEM_TYPE		0xFE
 
 #if IS_ENABLED(CONFIG_IPC_LOGGING)
 void *cnss_ipc_log_context;
@@ -136,11 +137,35 @@ static int cnss_stats_show_state(struct seq_file *s,
 	return 0;
 }
 
+static int cnss_stats_show_capability(struct seq_file *s,
+				      struct cnss_plat_data *plat_priv)
+{
+	if (test_bit(CNSS_FW_READY, &plat_priv->driver_state)) {
+		seq_puts(s, "\n<---------------- FW Capability ----------------->\n");
+		seq_printf(s, "Chip ID: 0x%x\n", plat_priv->chip_info.chip_id);
+		seq_printf(s, "Chip family: 0x%x\n",
+			   plat_priv->chip_info.chip_family);
+		seq_printf(s, "Board ID: 0x%x\n",
+			   plat_priv->board_info.board_id);
+		seq_printf(s, "SOC Info: 0x%x\n", plat_priv->soc_info.soc_id);
+		seq_printf(s, "Firmware Version: 0x%x\n",
+			   plat_priv->fw_version_info.fw_version);
+		seq_printf(s, "Firmware Build Timestamp: %s\n",
+			   plat_priv->fw_version_info.fw_build_timestamp);
+		seq_printf(s, "Firmware Build ID: %s\n",
+			   plat_priv->fw_build_id);
+	}
+
+	return 0;
+}
+
 static int cnss_stats_show(struct seq_file *s, void *data)
 {
 	struct cnss_plat_data *plat_priv = s->private;
 
 	cnss_stats_show_state(s, plat_priv);
+
+	cnss_stats_show_capability(s, plat_priv);
 
 	return 0;
 }
@@ -268,6 +293,7 @@ static int cnss_reg_read_debug_show(struct seq_file *s, void *data)
 	if (!plat_priv->diag_reg_read_buf) {
 		seq_puts(s, "\nUsage: echo <mem_type> <offset> <data_len> > <debugfs_path>/cnss/reg_read\n");
 		seq_puts(s, "Use mem_type = 0xff for register read by IO access, data_len will be ignored\n");
+		seq_puts(s, "Use mem_type = 0xfe for register read by raw IO access which skips sanity checks, data_len will be ignored\n");
 		seq_puts(s, "Use other mem_type for register read by QMI\n");
 		mutex_unlock(&plat_priv->dev_lock);
 		return 0;
@@ -339,8 +365,11 @@ static ssize_t cnss_reg_read_debug_write(struct file *fp,
 	if (kstrtou32(token, 0, &data_len))
 		return -EINVAL;
 
-	if (mem_type == MMIO_REG_ACCESS_MEM_TYPE) {
-		ret = cnss_bus_debug_reg_read(plat_priv, reg_offset, &reg_val);
+	if (mem_type == MMIO_REG_ACCESS_MEM_TYPE ||
+	    mem_type == MMIO_REG_RAW_ACCESS_MEM_TYPE) {
+		ret = cnss_bus_debug_reg_read(plat_priv, reg_offset, &reg_val,
+					      mem_type ==
+					      MMIO_REG_RAW_ACCESS_MEM_TYPE);
 		if (ret)
 			return ret;
 		cnss_pr_dbg("Read 0x%x from register offset 0x%x\n", reg_val,
@@ -398,6 +427,7 @@ static int cnss_reg_write_debug_show(struct seq_file *s, void *data)
 {
 	seq_puts(s, "\nUsage: echo <mem_type> <offset> <reg_val> > <debugfs_path>/cnss/reg_write\n");
 	seq_puts(s, "Use mem_type = 0xff for register write by IO access\n");
+	seq_puts(s, "Use mem_type = 0xfe for register write by raw IO access which skips sanity checks\n");
 	seq_puts(s, "Use other mem_type for register write by QMI\n");
 
 	return 0;
@@ -450,8 +480,11 @@ static ssize_t cnss_reg_write_debug_write(struct file *fp,
 	if (kstrtou32(token, 0, &reg_val))
 		return -EINVAL;
 
-	if (mem_type == MMIO_REG_ACCESS_MEM_TYPE) {
-		ret = cnss_bus_debug_reg_write(plat_priv, reg_offset, reg_val);
+	if (mem_type == MMIO_REG_ACCESS_MEM_TYPE ||
+	    mem_type == MMIO_REG_RAW_ACCESS_MEM_TYPE) {
+		ret = cnss_bus_debug_reg_write(plat_priv, reg_offset, reg_val,
+					       mem_type ==
+					       MMIO_REG_RAW_ACCESS_MEM_TYPE);
 		if (ret)
 			return ret;
 		cnss_pr_dbg("Wrote 0x%x to register offset 0x%x\n", reg_val,
@@ -710,6 +743,7 @@ static int cnss_show_quirks_state(struct seq_file *s,
 			continue;
 		case IGNORE_PCI_LINK_FAILURE:
 			seq_puts(s, "IGNORE_PCI_LINK_FAILURE");
+			continue;
 		case DISABLE_TIME_SYNC:
 			seq_puts(s, "DISABLE_TIME_SYNC");
 			continue;
@@ -838,8 +872,15 @@ int cnss_debugfs_create(struct cnss_plat_data *plat_priv)
 {
 	int ret = 0;
 	struct dentry *root_dentry;
+	char name[CNSS_FS_NAME_SIZE];
 
-	root_dentry = debugfs_create_dir("cnss", 0);
+	if (cnss_is_dual_wlan_enabled())
+		snprintf(name, CNSS_FS_NAME_SIZE, CNSS_FS_NAME "_%d",
+			 plat_priv->plat_idx);
+	else
+		snprintf(name, CNSS_FS_NAME_SIZE, CNSS_FS_NAME);
+
+	root_dentry = debugfs_create_dir(name, NULL);
 	if (IS_ERR(root_dentry)) {
 		ret = PTR_ERR(root_dentry);
 		cnss_pr_err("Unable to create debugfs %d\n", ret);

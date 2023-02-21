@@ -386,6 +386,7 @@ struct arm_smmu_device {
 	unsigned long			pgsize_bitmap;
 
 	u32				num_global_irqs;
+	u32				tcu_testbus_version;
 	u32				num_context_irqs;
 	unsigned int			*irqs;
 	struct clk_bulk_data		*clks;
@@ -403,6 +404,7 @@ struct arm_smmu_device {
 	/* protects idr */
 	struct mutex			idr_mutex;
 	struct idr			asid_idr;
+	bool smmu_restore;
 
 	unsigned long			sync_timed_out;
 };
@@ -483,6 +485,7 @@ struct arm_smmu_domain {
 	spinlock_t			cb_lock; /* Serialises ATS1* ops */
 	spinlock_t			sync_lock; /* Serialises TLB syncs */
 	struct msm_io_pgtable_info	pgtbl_info[2];
+	enum io_pgtable_fmt		pgtbl_fmt;
 	DECLARE_BITMAP(attributes, DOMAIN_ATTR_EXTENDED_MAX);
 	u32				secure_vmid;
 	struct list_head		pte_info_list;

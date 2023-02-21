@@ -9,6 +9,8 @@
 #define WLFW_SERVICE_ID_V01 0x45
 #define WLFW_SERVICE_VERS_V01 0x01
 
+#define QMI_WLFW_SUBSYS_RESTART_LEVEL_RESP_V01 0x0055
+#define QMI_WLFW_SUBSYS_RESTART_LEVEL_REQ_V01 0x0055
 #define QMI_WLFW_POWER_SAVE_RESP_V01 0x0050
 #define QMI_WLFW_CAP_REQ_V01 0x0024
 #define QMI_WLFW_CAL_REPORT_REQ_V01 0x0026
@@ -55,6 +57,7 @@
 #define QMI_WLFW_ANTENNA_GRANT_REQ_V01 0x0048
 #define QMI_WLFW_BDF_DOWNLOAD_REQ_V01 0x0025
 #define QMI_WLFW_FW_MEM_READY_IND_V01 0x0037
+#define QMI_WLFW_WLAN_HW_INIT_CFG_REQ_V01 0x0056
 #define QMI_WLFW_RESPOND_GET_INFO_IND_V01 0x004B
 #define QMI_WLFW_QDSS_TRACE_DATA_REQ_V01 0x0042
 #define QMI_WLFW_CAL_DOWNLOAD_RESP_V01 0x0027
@@ -94,6 +97,7 @@
 #define QMI_WLFW_WFC_CALL_STATUS_REQ_V01 0x0049
 #define QMI_WLFW_DEVICE_INFO_RESP_V01 0x004C
 #define QMI_WLFW_MSA_READY_RESP_V01 0x002E
+#define QMI_WLFW_WLAN_HW_INIT_CFG_RESP_V01 0x0056
 #define QMI_WLFW_QDSS_TRACE_FREE_IND_V01 0x0046
 #define QMI_WLFW_QDSS_MEM_READY_IND_V01 0x0052
 
@@ -247,8 +251,16 @@ enum wlfw_m3_segment_type_v01 {
 enum cnss_feature_v01 {
 	CNSS_FEATURE_MIN_VAL_V01 = INT_MIN,
 	BOOTSTRAP_CLOCK_SELECT_V01 = 0,
+	CNSS_DRV_SUPPORT_V01 = 1,
 	CNSS_MAX_FEATURE_V01 = 64,
 	CNSS_FEATURE_MAX_VAL_V01 = INT_MAX,
+};
+
+enum wlfw_wlan_rf_subtype_v01 {
+	WLFW_WLAN_RF_SUBTYPE_MIN_VAL_V01 = INT_MIN,
+	WLFW_WLAN_RF_SLATE_V01 = 0,
+	WLFW_WLAN_RF_APACHE_V01 = 1,
+	WLFW_WLAN_RF_SUBTYPE_MAX_VAL_V01 = INT_MAX,
 };
 
 #define QMI_WLFW_CE_ATTR_FLAGS_V01 ((u32)0x00)
@@ -529,8 +541,11 @@ struct wlfw_cap_resp_msg_v01 {
 	enum wlfw_rd_card_chain_cap_v01 rd_card_chain_cap;
 	u8 dev_mem_info_valid;
 	struct wlfw_dev_mem_info_s_v01 dev_mem_info[QMI_WLFW_MAX_DEV_MEM_NUM_V01];
+	u8 foundry_name_valid;
+	char foundry_name[QMI_WLFW_MAX_STR_LEN_V01 + 1];
 };
-#define WLFW_CAP_RESP_MSG_V01_MAX_MSG_LEN 320
+
+#define WLFW_CAP_RESP_MSG_V01_MAX_MSG_LEN 339
 extern struct qmi_elem_info wlfw_cap_resp_msg_v01_ei[];
 
 struct wlfw_bdf_download_req_msg_v01 {
@@ -1217,5 +1232,35 @@ struct wlfw_m3_dump_upload_segments_req_ind_msg_v01 {
 };
 #define WLFW_M3_DUMP_UPLOAD_SEGMENTS_REQ_IND_MSG_V01_MAX_MSG_LEN 387
 extern struct qmi_elem_info wlfw_m3_dump_upload_segments_req_ind_msg_v01_ei[];
+
+struct wlfw_subsys_restart_level_req_msg_v01 {
+	u8 restart_level_type_valid;
+	u8 restart_level_type;
+};
+
+#define WLFW_SUBSYS_RESTART_LEVEL_REQ_MSG_V01_MAX_MSG_LEN 4
+extern struct qmi_elem_info wlfw_subsys_restart_level_req_msg_v01_ei[];
+
+struct wlfw_subsys_restart_level_resp_msg_v01 {
+	struct qmi_response_type_v01 resp;
+};
+
+#define WLFW_SUBSYS_RESTART_LEVEL_RESP_MSG_V01_MAX_MSG_LEN 7
+extern struct qmi_elem_info wlfw_subsys_restart_level_resp_msg_v01_ei[];
+
+struct wlfw_wlan_hw_init_cfg_req_msg_v01 {
+	u8 rf_subtype_valid;
+	enum wlfw_wlan_rf_subtype_v01 rf_subtype;
+};
+
+#define WLFW_WLAN_HW_INIT_CFG_REQ_MSG_V01_MAX_MSG_LEN 7
+extern struct qmi_elem_info wlfw_wlan_hw_init_cfg_req_msg_v01_ei[];
+
+struct wlfw_wlan_hw_init_cfg_resp_msg_v01 {
+	struct qmi_response_type_v01 resp;
+};
+
+#define WLFW_WLAN_HW_INIT_CFG_RESP_MSG_V01_MAX_MSG_LEN 7
+extern struct qmi_elem_info wlfw_wlan_hw_init_cfg_resp_msg_v01_ei[];
 
 #endif

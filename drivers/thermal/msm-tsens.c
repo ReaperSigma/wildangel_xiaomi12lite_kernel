@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020, 2021 The Linux Foundation. All rights reserved.
  */
 
 #include <linux/err.h>
@@ -12,6 +12,7 @@
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
+#include <linux/suspend.h>
 #include "tsens.h"
 #include "thermal_core.h"
 
@@ -59,6 +60,40 @@ static int tsens_register_interrupts(struct tsens_device *tmdev)
 		return tmdev->ops->interrupts_reg(tmdev);
 
 	return 0;
+}
+
+static int tsens_suspend(struct device *dev)
+{
+	struct tsens_device *tmdev = dev_get_drvdata(dev);
+
+	if (mem_sleep_current != PM_SUSPEND_MEM)
+		return 0;
+
+	return tmdev->ops->suspend(tmdev);
+}
+
+static int tsens_resume(struct device *dev)
+{
+	struct tsens_device *tmdev = dev_get_drvdata(dev);
+
+	if (mem_sleep_current != PM_SUSPEND_MEM)
+		return 0;
+
+	return tmdev->ops->resume(tmdev);
+}
+
+static int tsens_freeze(struct device *dev)
+{
+	struct tsens_device *tmdev = dev_get_drvdata(dev);
+
+	return tmdev->ops->suspend(tmdev);
+}
+
+static int tsens_restore(struct device *dev)
+{
+	struct tsens_device *tmdev = dev_get_drvdata(dev);
+
+	return tmdev->ops->resume(tmdev);
 }
 
 static const struct of_device_id tsens_table[] = {
@@ -366,15 +401,23 @@ static int tsens_tm_probe(struct platform_device *pdev)
 
 	list_add_tail(&tmdev->list, &tsens_device_list);
 	platform_set_drvdata(pdev, tmdev);
-
+	dev_set_drvdata(tmdev->dev, tmdev);
 	return rc;
 }
+
+static const struct dev_pm_ops tsens_pm_ops = {
+	.freeze = tsens_freeze,
+	.restore = tsens_restore,
+	.suspend = tsens_suspend,
+	.resume = tsens_resume,
+};
 
 static struct platform_driver tsens_tm_driver = {
 	.probe = tsens_tm_probe,
 	.remove = tsens_tm_remove,
 	.driver = {
 		.name = "msm-tsens",
+		.pm = &tsens_pm_ops,
 		.of_match_table = tsens_table,
 	},
 };

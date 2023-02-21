@@ -47,8 +47,6 @@
 #define BIN_BDF_FILE_NAME		"bdwlan.bin"
 #define BIN_BDF_FILE_NAME_PREFIX	"bdwlan.b"
 #define REGDB_FILE_NAME			"regdb.bin"
-#define REGDB_FILE_NAME_XIAOMI		"regdb_xiaomi.bin"
-#define DUMMY_BDF_FILE_NAME		"bdwlan.dmy"
 
 #define QDSS_TRACE_CONFIG_FILE "qdss_trace_config.cfg"
 
@@ -717,9 +715,11 @@ int wlfw_cap_send_sync_msg(struct icnss_priv *priv)
 	    resp->rd_card_chain_cap == WLFW_RD_CARD_CHAIN_CAP_1x1_V01)
 		priv->is_chain1_supported = false;
 
-	icnss_pr_dbg("Capability, chip_id: 0x%x, chip_family: 0x%x, board_id: 0x%x, soc_id: 0x%x, fw_version: 0x%x, fw_build_timestamp: %s, fw_build_id: %s",
+	icnss_pr_dbg("Capability, chip_id: 0x%x, chip_family: 0x%x, board_id: 0x%x, soc_id: 0x%x",
 		     priv->chip_info.chip_id, priv->chip_info.chip_family,
-		     priv->board_id, priv->soc_id,
+		     priv->board_id, priv->soc_id);
+
+	icnss_pr_dbg("fw_version: 0x%x, fw_build_timestamp: %s, fw_build_id: %s",
 		     priv->fw_version_info.fw_version,
 		     priv->fw_version_info.fw_build_timestamp,
 		     priv->fw_build_id);
@@ -983,11 +983,6 @@ static int icnss_get_bdf_file_name(struct icnss_priv *priv,
 	case ICNSS_BDF_REGDB:
 		snprintf(filename_tmp, filename_len, REGDB_FILE_NAME_XIAOMI);
 		break;
-	case ICNSS_BDF_DUMMY:
-		icnss_pr_dbg("CNSS_BDF_DUMMY is set, sending dummy BDF\n");
-		snprintf(filename_tmp, filename_len, DUMMY_BDF_FILE_NAME);
-		ret = ICNSS_MAX_FILE_NAME;
-		break;
 	default:
 		icnss_pr_err("Invalid BDF type: %d\n",
 			     priv->ctrl_params.bdf_type);
@@ -995,7 +990,7 @@ static int icnss_get_bdf_file_name(struct icnss_priv *priv,
 		break;
 	}
 
-	if (ret >= 0)
+	if (!ret)
 		icnss_add_fw_prefix_name(priv, filename, filename_tmp);
 
 	return ret;
@@ -1010,8 +1005,6 @@ static char *icnss_bdf_type_to_str(enum icnss_bdf_type bdf_type)
 		return "BDF";
 	case ICNSS_BDF_REGDB:
 		return "REGDB";
-	case ICNSS_BDF_DUMMY:
-		return "BDF";
 	default:
 		return "UNKNOWN";
 	}
@@ -1043,13 +1036,8 @@ int icnss_wlfw_bdf_dnld_send_sync(struct icnss_priv *priv, u32 bdf_type)
 
 	ret = icnss_get_bdf_file_name(priv, bdf_type,
 				      filename, sizeof(filename));
-	if (ret > 0) {
-		temp = DUMMY_BDF_FILE_NAME;
-		remaining = ICNSS_MAX_FILE_NAME;
-		goto bypass_bdf;
-	} else if (ret < 0) {
+	if (ret)
 		goto err_req_fw;
-	}
 
 	ret = request_firmware(&fw_entry, filename, &priv->pdev->dev);
 	if (ret) {
@@ -1061,7 +1049,6 @@ int icnss_wlfw_bdf_dnld_send_sync(struct icnss_priv *priv, u32 bdf_type)
 	temp = fw_entry->data;
 	remaining = fw_entry->size;
 
-bypass_bdf:
 	icnss_pr_dbg("Downloading %s: %s, size: %u\n",
 		     icnss_bdf_type_to_str(bdf_type), filename, remaining);
 
@@ -1126,16 +1113,14 @@ bypass_bdf:
 		req->seg_id++;
 	}
 
-	if (bdf_type != ICNSS_BDF_DUMMY)
-		release_firmware(fw_entry);
+	release_firmware(fw_entry);
 
 	kfree(req);
 	kfree(resp);
 	return 0;
 
 err_send:
-	if (bdf_type != ICNSS_BDF_DUMMY)
-		release_firmware(fw_entry);
+	release_firmware(fw_entry);
 err_req_fw:
 	if (bdf_type != ICNSS_BDF_REGDB)
 		ICNSS_QMI_ASSERT();
@@ -3273,6 +3258,148 @@ int icnss_wlfw_get_info_send_sync(struct icnss_priv *plat_priv, int type,
 
 	kfree(req);
 	kfree(resp);
+	return 0;
+
+out:
+	kfree(req);
+	kfree(resp);
+	return ret;
+}
+
+int wlfw_subsys_restart_level_msg(struct icnss_priv *penv, uint8_t type)
+{
+	int ret;
+	struct wlfw_subsys_restart_level_req_msg_v01 *req;
+	struct wlfw_subsys_restart_level_resp_msg_v01 *resp;
+	struct qmi_txn txn;
+
+	if (!penv)
+		return -ENODEV;
+
+	if (test_bit(ICNSS_FW_DOWN, &penv->state))
+		return -EINVAL;
+
+	icnss_pr_dbg("Sending subsystem restart level, type: 0x%x\n", type);
+
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	if (!req)
+		return -ENOMEM;
+
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
+	if (!resp) {
+		kfree(req);
+		return -ENOMEM;
+	}
+
+	req->restart_level_type_valid = 1;
+	req->restart_level_type = type;
+
+	penv->stats.restart_level_req++;
+
+	ret = qmi_txn_init(&penv->qmi, &txn,
+			   wlfw_subsys_restart_level_resp_msg_v01_ei, resp);
+	if (ret < 0) {
+		icnss_pr_err("Fail to init txn for subsystem restart level, resp %d\n",
+			     ret);
+		goto out;
+	}
+
+	ret = qmi_send_request(&penv->qmi, NULL, &txn,
+			       QMI_WLFW_SUBSYS_RESTART_LEVEL_REQ_V01,
+			       WLFW_SUBSYS_RESTART_LEVEL_REQ_MSG_V01_MAX_MSG_LEN,
+			       wlfw_subsys_restart_level_req_msg_v01_ei, req);
+	if (ret < 0) {
+		qmi_txn_cancel(&txn);
+		icnss_pr_err("Fail to send subsystem restart level %d\n",
+			     ret);
+		goto out;
+	}
+
+	ret = qmi_txn_wait(&txn, penv->ctrl_params.qmi_timeout);
+	if (ret < 0) {
+		icnss_pr_err("Subsystem restart level timed out with ret %d\n",
+			     ret);
+		goto out;
+
+	} else if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
+		icnss_pr_err("Subsystem restart level request rejected,result:%d error:%d\n",
+			     resp->resp.result, resp->resp.error);
+		ret = -resp->resp.result;
+		goto out;
+	}
+
+	penv->stats.restart_level_resp++;
+
+	kfree(resp);
+	kfree(req);
+	return 0;
+
+out:
+	kfree(req);
+	kfree(resp);
+	penv->stats.restart_level_err++;
+	return ret;
+}
+
+int wlfw_wlan_hw_init_cfg_msg(struct icnss_priv *penv,
+			      enum wlfw_wlan_rf_subtype_v01 type)
+{
+	int ret;
+	struct wlfw_wlan_hw_init_cfg_req_msg_v01 *req;
+	struct wlfw_wlan_hw_init_cfg_resp_msg_v01 *resp;
+	struct qmi_txn txn;
+
+	if (!penv)
+		return -ENODEV;
+
+	icnss_pr_dbg("Sending hw init cfg, rf_subtype: 0x%x\n", type);
+
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	if (!req)
+		return -ENOMEM;
+
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
+	if (!resp) {
+		kfree(req);
+		return -ENOMEM;
+	}
+
+	req->rf_subtype_valid = 1;
+	req->rf_subtype = type;
+
+	ret = qmi_txn_init(&penv->qmi, &txn,
+			   wlfw_wlan_hw_init_cfg_resp_msg_v01_ei, resp);
+	if (ret < 0) {
+		icnss_pr_err("Fail to init txn for hw init cfg, resp %d\n",
+			     ret);
+		goto out;
+	}
+
+	ret = qmi_send_request(&penv->qmi, NULL, &txn,
+			       QMI_WLFW_WLAN_HW_INIT_CFG_REQ_V01,
+			       WLFW_WLAN_HW_INIT_CFG_REQ_MSG_V01_MAX_MSG_LEN,
+			       wlfw_wlan_hw_init_cfg_req_msg_v01_ei, req);
+	if (ret < 0) {
+		qmi_txn_cancel(&txn);
+		icnss_pr_err("Fail to send hw init cfg %d\n", ret);
+		goto out;
+	}
+
+	ret = qmi_txn_wait(&txn, penv->ctrl_params.qmi_timeout);
+	if (ret < 0) {
+		icnss_pr_err("HW init cfg timed out with ret %d\n",
+			     ret);
+		goto out;
+
+	} else if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
+		icnss_pr_err("HW init cfg request rejected,result:%d error:%d\n",
+			     resp->resp.result, resp->resp.error);
+		ret = -resp->resp.result;
+		goto out;
+	}
+
+	kfree(resp);
+	kfree(req);
 	return 0;
 
 out:

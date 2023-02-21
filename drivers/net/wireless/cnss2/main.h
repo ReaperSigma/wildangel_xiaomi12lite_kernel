@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2016-2021, The Linux Foundation. All rights reserved. */
-
+/* Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ */
 #ifndef _CNSS_MAIN_H
 #define _CNSS_MAIN_H
 
@@ -15,7 +16,7 @@
 #include <linux/pm_qos.h>
 #include <linux/platform_device.h>
 #include <net/cnss2.h>
-#if IS_ENABLED(CONFIG_QCOM_MEMORY_DUMP_V2)
+#if IS_ENABLED(CONFIG_QCOM_MEMORY_DUMP_V2) || IS_ENABLED(CONFIG_QCOM_MINIDUMP)
 #include <soc/qcom/memory_dump.h>
 #endif
 #if IS_ENABLED(CONFIG_MSM_SUBSYSTEM_RESTART) || \
@@ -43,8 +44,12 @@
 #define CNSS_RAMDUMP_VERSION		0
 #define MAX_FIRMWARE_NAME_LEN		40
 #define FW_V2_NUMBER                    2
-#define POWER_ON_RETRY_MAX_TIMES        3
-#define POWER_ON_RETRY_DELAY_MS         200
+#define POWER_ON_RETRY_MAX_TIMES        4
+#define POWER_ON_RETRY_DELAY_MS         500
+#define CNSS_FS_NAME			"cnss"
+#define CNSS_FS_NAME_SIZE		15
+#define CNSS_DEVICE_NAME_SIZE		16
+#define QRTR_NODE_FW_ID_BASE		7
 
 #define CNSS_EVENT_SYNC   BIT(0)
 #define CNSS_EVENT_UNINTERRUPTIBLE BIT(1)
@@ -57,6 +62,7 @@ enum cnss_dev_bus_type {
 	CNSS_BUS_NONE = -1,
 	CNSS_BUS_PCI,
 	CNSS_BUS_USB,
+	CNSS_BUS_MAX,
 };
 
 struct cnss_vreg_cfg {
@@ -414,6 +420,7 @@ enum cnss_timeout_type {
 
 struct cnss_plat_data {
 	struct platform_device *plat_dev;
+	enum cnss_driver_mode driver_mode;
 	void *bus_priv;
 	enum cnss_dev_bus_type bus_type;
 	struct list_head vreg_list;
@@ -506,6 +513,12 @@ struct cnss_plat_data {
 	struct device_node *dev_node;
 	u64 feature_list;
 	bool adsp_pc_enabled;
+	char device_name[CNSS_DEVICE_NAME_SIZE];
+	u32 plat_idx;
+	bool enumerate_done;
+	int qrtr_node_id;
+	unsigned int wlfw_service_instance_id;
+	const char *pld_bus_ops_name;
 };
 
 #ifdef CONFIG_ARCH_QCOM
@@ -531,6 +544,11 @@ static inline u64 cnss_get_host_timestamp(struct cnss_plat_data *plat_priv)
 struct cnss_plat_data *cnss_get_plat_priv(struct platform_device *plat_dev);
 void cnss_pm_stay_awake(struct cnss_plat_data *plat_priv);
 void cnss_pm_relax(struct cnss_plat_data *plat_priv);
+struct cnss_plat_data *cnss_get_plat_priv_by_rc_num(int rc_num);
+int cnss_get_plat_env_count(void);
+struct cnss_plat_data *cnss_get_plat_env(int index);
+void cnss_get_qrtr_info(struct cnss_plat_data *plat_priv);
+bool cnss_is_dual_wlan_enabled(void);
 int cnss_driver_event_post(struct cnss_plat_data *plat_priv,
 			   enum cnss_driver_event_type type,
 			   u32 flags, void *data);

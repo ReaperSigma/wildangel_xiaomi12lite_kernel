@@ -289,6 +289,8 @@ static void _retire_timestamp(struct kgsl_drawobj *drawobj)
 		KGSL_MEMSTORE_OFFSET(context->id, eoptimestamp),
 		drawobj->timestamp);
 
+	adreno_drawctxt_write_shadow_timestamp(context, drawobj->timestamp);
+
 	drawctxt->submitted_timestamp = drawobj->timestamp;
 
 	/* Retire pending GPU events for the object */
@@ -1125,8 +1127,8 @@ static inline bool _verify_ib(struct kgsl_device_private *dev_priv,
 	}
 
 	/* Make sure that the address is in range and dword aligned */
-	if (!kgsl_mmu_gpuaddr_in_range(private->pagetable, ib->gpuaddr) ||
-	    !IS_ALIGNED(ib->gpuaddr, 4)) {
+	if (!kgsl_mmu_gpuaddr_in_range(private->pagetable, ib->gpuaddr,
+		ib->size) || !IS_ALIGNED(ib->gpuaddr, 4)) {
 		pr_context(device, context, "ctxt %d invalid ib gpuaddr %llX\n",
 			context->id, ib->gpuaddr);
 		return false;
@@ -1689,7 +1691,7 @@ static void adreno_fault_header(struct kgsl_device *device,
 			drawobj ? ADRENO_CONTEXT(drawobj->context) : NULL;
 	unsigned int status, rptr, wptr, ib1sz, ib2sz;
 	uint64_t ib1base, ib2base;
-	bool gx_on = gmu_core_dev_gx_is_on(device);
+	bool gx_on = adreno_gx_is_on(adreno_dev);
 	int id = (rb != NULL) ? rb->id : -1;
 	const char *type = fault & ADRENO_GMU_FAULT ? "gmu" : "gpu";
 
@@ -2131,8 +2133,7 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 			0xFFFFFFFF);
 	}
 
-	gx_on = gmu_core_dev_gx_is_on(device);
-
+	gx_on = adreno_gx_is_on(adreno_dev);
 
 	/*
 	 * On A5xx and A6xx, read RBBM_STATUS3:SMMU_STALLED_ON_FAULT (BIT 24)
@@ -2472,6 +2473,10 @@ static int adreno_dispatch_process_drawqueue(struct adreno_device *adreno_dev,
 			msecs_to_jiffies(adreno_drawobj_timeout);
 		return count;
 	}
+
+	/* Don't check timeout if we are still in middle of preemption */
+	if (!adreno_in_preempt_state(adreno_dev, ADRENO_PREEMPT_NONE))
+		return 0;
 
 	/*
 	 * If we get here then 1) the ringbuffer is current and 2) we haven't

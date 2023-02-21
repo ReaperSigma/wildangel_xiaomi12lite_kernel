@@ -41,7 +41,7 @@ bool alternative_is_applied(u16 cpufeature)
 /*
  * Check if the target PC is within an alternative block.
  */
-static bool branch_insn_requires_update(struct alt_instr *alt, unsigned long pc)
+static __always_inline bool branch_insn_requires_update(struct alt_instr *alt, unsigned long pc)
 {
 	unsigned long replptr = (unsigned long)ALT_REPL_PTR(alt);
 	return !(pc >= replptr && pc <= (replptr + alt->alt_len));
@@ -49,7 +49,7 @@ static bool branch_insn_requires_update(struct alt_instr *alt, unsigned long pc)
 
 #define align_down(x, a)	((unsigned long)(x) & ~(((unsigned long)(a)) - 1))
 
-static u32 get_alt_insn(struct alt_instr *alt, __le32 *insnptr, __le32 *altinsnptr)
+static __always_inline u32 get_alt_insn(struct alt_instr *alt, __le32 *insnptr, __le32 *altinsnptr)
 {
 	u32 insn;
 
@@ -94,7 +94,7 @@ static u32 get_alt_insn(struct alt_instr *alt, __le32 *insnptr, __le32 *altinsnp
 	return insn;
 }
 
-static void patch_alternative(struct alt_instr *alt,
+static noinstr void patch_alternative(struct alt_instr *alt,
 			      __le32 *origptr, __le32 *updptr, int nr_inst)
 {
 	__le32 *replptr;
@@ -203,8 +203,13 @@ static int __apply_alternatives_multi_stop(void *unused)
 		.end	= (struct alt_instr *)__alt_instructions_end,
 	};
 
+#ifdef CONFIG_FIX_BOOT_CPU_LOGICAL_MAPPING
+	/* We always have a logical boot CPU at this point (__init) */
+	if (smp_processor_id() != logical_bootcpu_id) {
+#else
 	/* We always have a CPU 0 at this point (__init) */
 	if (smp_processor_id()) {
+#endif
 		while (!READ_ONCE(all_alternatives_applied))
 			cpu_relax();
 		isb();
@@ -242,7 +247,11 @@ void __init apply_boot_alternatives(void)
 	};
 
 	/* If called on non-boot cpu things could go wrong */
+#ifdef CONFIG_FIX_BOOT_CPU_LOGICAL_MAPPING
+	WARN_ON(smp_processor_id() != logical_bootcpu_id);
+#else
 	WARN_ON(smp_processor_id() != 0);
+#endif
 
 	__apply_alternatives(&region, false, &boot_capabilities[0]);
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/interconnect.h>
@@ -410,6 +411,7 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 	struct adreno_context *drawctxt = rb->drawctxt_active;
 	struct kgsl_context *context = NULL;
 	bool secured_ctxt = false;
+	bool write_separate_shadow;
 	static unsigned int _seq_cnt;
 
 	if (drawctxt != NULL && kgsl_context_detached(&drawctxt->base) &&
@@ -482,7 +484,7 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 
 	if (gpudev->preemption_pre_ibsubmit &&
 			adreno_is_preemption_enabled(adreno_dev))
-		total_sizedwords += 27;
+		total_sizedwords += 31;
 
 	if (gpudev->preemption_post_ibsubmit &&
 			adreno_is_preemption_enabled(adreno_dev))
@@ -504,6 +506,15 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 	if (drawctxt && !is_internal_cmds(flags)) {
 		/* global timestamp with cache flush ts for non-zero context */
 		total_sizedwords += 5;
+	}
+
+	write_separate_shadow = (drawctxt &&
+				 drawctxt->shadow_timestamp_mem &&
+				 !is_internal_cmds(flags));
+
+	if (write_separate_shadow) {
+		total_sizedwords += 4; /* sop mem_write */
+		total_sizedwords += 5; /* eop event_write */
 	}
 
 	if (flags & KGSL_CMD_FLAGS_WFI)
@@ -581,6 +592,12 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 	/* start-of-pipeline timestamp for the ringbuffer */
 	ringcmds += cp_mem_write(adreno_dev, ringcmds,
 		MEMSTORE_RB_GPU_ADDR(device, rb, soptimestamp), rb->timestamp);
+
+	/* start-of-pipeline timestamp for context separate shadow memory */
+	if (write_separate_shadow)
+		ringcmds += cp_mem_write(adreno_dev, ringcmds,
+			DRAWCTXT_SHADOW_GPU_ADDR(drawctxt, soptimestamp),
+			timestamp);
 
 	if (secured_ctxt)
 		ringcmds += cp_secure_mode(adreno_dev, ringcmds, 1);
@@ -672,6 +689,15 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
 	} else {
 		ringcmds += cp_gpuaddr(adreno_dev, ringcmds,
 			MEMSTORE_RB_GPU_ADDR(device, rb, eoptimestamp));
+		*ringcmds++ = timestamp;
+	}
+
+	/* write end-of-pipeline to context separate shadow memory */
+	if (write_separate_shadow) {
+		*ringcmds++ = cp_mem_packet(adreno_dev, CP_EVENT_WRITE, 3, 1);
+		*ringcmds++ = CACHE_FLUSH_TS;
+		ringcmds += cp_gpuaddr(adreno_dev, ringcmds,
+			DRAWCTXT_SHADOW_GPU_ADDR(drawctxt, eoptimestamp));
 		*ringcmds++ = timestamp;
 	}
 
@@ -995,7 +1021,7 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 	if (gpudev->ccu_invalidate)
 		dwords += 4;
 
-	link = kcalloc(dwords, sizeof(unsigned int), GFP_KERNEL);
+	link = kvcalloc(dwords, sizeof(unsigned int), GFP_KERNEL);
 	if (!link) {
 		ret = -ENOMEM;
 		goto done;
@@ -1128,7 +1154,7 @@ done:
 	trace_kgsl_issueibcmds(device, context->id, numibs, drawobj->timestamp,
 			drawobj->flags, ret, drawctxt->type);
 
-	kfree(link);
+	kvfree(link);
 	return ret;
 }
 

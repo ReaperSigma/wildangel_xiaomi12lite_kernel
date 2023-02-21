@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/err.h>
@@ -406,22 +407,27 @@ static int adc_tm_probe(struct platform_device *pdev)
 
 	if (indio_chan_count != dt_chan_num) {
 		dev_err(dev, "VADC IIO channel missing in main node\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto err_free_chans;
 	}
 
 	regmap = dev_get_regmap(dev->parent, NULL);
-	if (!regmap)
-		return -ENODEV;
+	if (!regmap) {
+		ret = -ENODEV;
+		goto err_free_chans;
+	}
 
 	ret = of_property_read_u32(node, "reg", &reg);
 	if (ret < 0)
-		return ret;
+		goto err_free_chans;
 
 	adc_tm = devm_kzalloc(&pdev->dev,
 			sizeof(struct adc_tm_chip) + (dt_chan_num *
 			(sizeof(struct adc_tm_sensor))), GFP_KERNEL);
-	if (!adc_tm)
-		return -ENOMEM;
+	if (!adc_tm) {
+		ret = -ENOMEM;
+		goto err_free_chans;
+	}
 
 	adc_tm->regmap = regmap;
 	adc_tm->dev = dev;
@@ -435,14 +441,15 @@ static int adc_tm_probe(struct platform_device *pdev)
 		adc_tm->pmic_rev_id = get_revid_data(revid_dev_node);
 		if (IS_ERR(adc_tm->pmic_rev_id)) {
 			pr_debug("Unable to get revid\n");
-			return -EPROBE_DEFER;
+			ret = -EPROBE_DEFER;
+			goto err_free_chans;
 		}
 	}
 
 	ret = adc_tm_get_dt_data(pdev, adc_tm, channels, dt_chan_num);
 	if (ret) {
 		dev_err(dev, "adc-tm get dt data failed\n");
-		return ret;
+		goto err_free_chans;
 	}
 
 	if (of_device_is_compatible(node, "qcom,adc-tm5-iio") ||
@@ -476,6 +483,7 @@ static int adc_tm_probe(struct platform_device *pdev)
 	list_add_tail(&adc_tm->list, &adc_tm_device_list);
 	adc_tm->device_list = &adc_tm_device_list;
 	return 0;
+
 fail:
 	i = 0;
 	while (i < dt_chan_num) {
@@ -483,6 +491,10 @@ fail:
 			destroy_workqueue(adc_tm->sensor[i].req_wq);
 		i++;
 	}
+
+err_free_chans:
+	iio_channel_release_all(channels);
+
 	return ret;
 }
 
@@ -496,10 +508,52 @@ static int adc_tm_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static int adc_tm_freeze(struct device *dev)
+{
+	struct adc_tm_chip *adc_tm = dev_get_drvdata(dev);
+	int rc = 0;
+
+	if (adc_tm->ops->freeze)
+		rc = adc_tm->ops->freeze(adc_tm);
+
+	return rc;
+}
+
+static int adc_tm_restore(struct device *dev)
+{
+	struct adc_tm_chip *adc_tm = dev_get_drvdata(dev);
+	int rc = 0;
+	unsigned int i = 0;
+
+	/*
+	 * Calling Thermal device update to adjust trip settings
+	 * based on current state of sensors before enabling
+	 * the thershold IRQ in restore flow,
+	 * to avoid mistriggering IRQ
+	 */
+	if (adc_tm->ops->restore) {
+		for (i = 0; i < adc_tm->dt_channels; i++) {
+			if (adc_tm->sensor[i].tzd != NULL)
+				thermal_zone_device_update(adc_tm->sensor[i].tzd,
+						THERMAL_DEVICE_UP);
+		}
+
+		rc = adc_tm->ops->restore(adc_tm);
+	}
+
+	return rc;
+}
+
+static const struct dev_pm_ops adc_tm_pm_ops = {
+	.freeze = adc_tm_freeze,
+	.restore = adc_tm_restore,
+};
+
 static struct platform_driver adc_tm_driver = {
 	.driver = {
 		.name = "qcom,adc-tm",
 		.of_match_table	= adc_tm_match_table,
+		.pm = &adc_tm_pm_ops,
 	},
 	.probe = adc_tm_probe,
 	.remove = adc_tm_remove,

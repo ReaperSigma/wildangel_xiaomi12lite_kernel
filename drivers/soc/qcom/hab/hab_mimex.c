@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include "hab.h"
 #include "hab_grantable.h"
@@ -83,7 +84,7 @@ struct export_desc_super *habmem_add_export(
 	if (!vchan || !sizebytes)
 		return NULL;
 
-	exp_super = kzalloc(sizebytes, GFP_KERNEL);
+	exp_super = vzalloc(sizebytes);
 	if (!exp_super)
 		return NULL;
 
@@ -131,7 +132,9 @@ void habmem_remove_export(struct export_desc *exp)
 	}
 
 	ctx = exp->ctx;
+	write_lock(&ctx->exp_lock);
 	ctx->export_total--;
+	write_unlock(&ctx->exp_lock);
 	exp->ctx = NULL;
 
 	habmem_export_put(exp_super);
@@ -169,7 +172,7 @@ static void habmem_export_destroy(struct kref *refcount)
 	spin_unlock(&pchan->expid_lock);
 
 	habmem_exp_release(exp_super);
-	kfree(exp_super);
+	vfree(exp_super);
 }
 
 /*
@@ -189,12 +192,21 @@ static int habmem_export_vchan(struct uhab_context *ctx,
 	struct hab_export_ack expected_ack = {0};
 	struct hab_header header = HAB_HEADER_INITIALIZER;
 
+	if (sizebytes > (uint32_t)HAB_HEADER_SIZE_MAX) {
+		pr_err("exp message too large, %u bytes, max is %d\n",
+			sizebytes, HAB_HEADER_SIZE_MAX);
+		return -EINVAL;
+	}
+
 	exp = idr_find(&vchan->pchan->expid_idr, export_id);
 	if (!exp) {
 		pr_err("export vchan failed: exp_id %d, pchan %s\n",
 				export_id, vchan->pchan->name);
 		return -EINVAL;
 	}
+
+	pr_debug("sizebytes including exp_desc: %u = %zu + %d\n",
+		sizebytes, sizeof(*exp), payload_size);
 
 	HAB_HEADER_SET_SIZE(header, sizebytes);
 	HAB_HEADER_SET_TYPE(header, HAB_PAYLOAD_TYPE_EXPORT);
@@ -241,8 +253,10 @@ int hab_mem_export(struct uhab_context *ctx,
 	int page_count;
 	int compressed = 0;
 
-	if (!ctx || !param || !param->buffer || !param->sizebytes
-		|| ((param->sizebytes % PAGE_SIZE) != 0))
+	if (!ctx || !param || !param->sizebytes
+		|| ((param->sizebytes % PAGE_SIZE) != 0)
+		|| (!param->buffer && !(HABMM_EXPIMP_FLAGS_FD & param->flags))
+		)
 		return -EINVAL;
 
 	vchan = hab_get_vchan_fromvcid(param->vcid, ctx, 0);
@@ -365,17 +379,17 @@ int hab_mem_import(struct uhab_context *ctx,
 	}
 	spin_unlock_bh(&ctx->imp_lock);
 
-	if ((exp->payload_count << PAGE_SHIFT) != param->sizebytes) {
-		pr_err("input size %d don't match buffer size %d\n",
-			param->sizebytes, exp->payload_count << PAGE_SHIFT);
-		ret = -EINVAL;
-		goto err_imp;
-	}
-
 	if (!found) {
 		pr_err("Fail to get export descriptor from export id %d\n",
 			param->exportid);
 		ret = -ENODEV;
+		goto err_imp;
+	}
+
+	if ((exp->payload_count << PAGE_SHIFT) != param->sizebytes) {
+		pr_err("input size %d don't match buffer size %d\n",
+			param->sizebytes, exp->payload_count << PAGE_SHIFT);
+		ret = -EINVAL;
 		goto err_imp;
 	}
 

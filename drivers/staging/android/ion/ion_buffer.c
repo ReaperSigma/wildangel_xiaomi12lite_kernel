@@ -99,6 +99,10 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 
 	mutex_init(&buffer->lock);
 	track_buffer_created(buffer);
+#ifdef CONFIG_DEBUG_ION_TRACK_HEAP_MEM
+	atomic_long_add(len, &heap->total_allocated);
+#endif
+
 	return buffer;
 
 err1:
@@ -312,13 +316,9 @@ int ion_buffer_destroy(struct ion_device *dev, struct ion_buffer *buffer)
 
 	heap = buffer->heap;
 	track_buffer_destroyed(buffer);
-
-#if IS_ENABLED(CONFIG_MIMISC_MC)
-	memcg_misc_uncharge(sg_page(buffer->sg_table->sgl),
-					PAGE_ALIGN(buffer->size) >> PAGE_SHIFT,
-					MEMCG_ION_TYPE);
+#ifdef CONFIG_DEBUG_ION_TRACK_HEAP_MEM
+	atomic_long_sub(buffer->size, &heap->total_allocated);
 #endif
-
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
 		ion_heap_freelist_add(heap, buffer);
 	else
@@ -332,6 +332,9 @@ void *ion_buffer_kmap_get(struct ion_buffer *buffer)
 	void *vaddr;
 
 	if (buffer->kmap_cnt) {
+		if (buffer->kmap_cnt == INT_MAX)
+			return ERR_PTR(-EOVERFLOW);
+
 		buffer->kmap_cnt++;
 		return buffer->vaddr;
 	}

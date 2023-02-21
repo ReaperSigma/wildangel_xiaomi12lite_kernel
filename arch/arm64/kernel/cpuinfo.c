@@ -347,6 +347,7 @@ static void __cpuinfo_store_cpu(struct cpuinfo_arm64 *info)
 	info->reg_id_aa64dfr1 = read_cpuid(ID_AA64DFR1_EL1);
 	info->reg_id_aa64isar0 = read_cpuid(ID_AA64ISAR0_EL1);
 	info->reg_id_aa64isar1 = read_cpuid(ID_AA64ISAR1_EL1);
+	info->reg_id_aa64isar2 = read_cpuid(ID_AA64ISAR2_EL1);
 	info->reg_id_aa64mmfr0 = read_cpuid(ID_AA64MMFR0_EL1);
 	info->reg_id_aa64mmfr1 = read_cpuid(ID_AA64MMFR1_EL1);
 	info->reg_id_aa64mmfr2 = read_cpuid(ID_AA64MMFR2_EL1);
@@ -391,7 +392,11 @@ void cpuinfo_store_cpu(void)
 
 void __init cpuinfo_store_boot_cpu(void)
 {
+#ifdef CONFIG_FIX_BOOT_CPU_LOGICAL_MAPPING
+	struct cpuinfo_arm64 *info = &per_cpu(cpu_data, logical_bootcpu_id);
+#else
 	struct cpuinfo_arm64 *info = &per_cpu(cpu_data, 0);
+#endif
 	__cpuinfo_store_cpu(info);
 
 	boot_cpu_data = *info;

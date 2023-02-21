@@ -47,6 +47,9 @@
 		.intr_cfg_reg = base + 0x8 + REG_SIZE * id,	\
 		.intr_status_reg = base + 0xc + REG_SIZE * id,	\
 		.intr_target_reg = base + 0x8 + REG_SIZE * id,	\
+		.dir_conn_reg = (base == EAST) ? base + 0xcc000 : \
+			((base == WEST) ? base + 0xcc000 : \
+			((base == NORTH) ? EAST + 0xcc000 : base + 0xcd000)), \
 		.mux_bit = 2,			\
 		.pull_bit = 0,			\
 		.drv_bit = 6,			\
@@ -63,6 +66,7 @@
 		.intr_polarity_bit = 1,		\
 		.intr_detection_bit = 2,	\
 		.intr_detection_width = 2,	\
+		.dir_conn_en_bit = 8,		\
 	}
 
 #define SDC_QDSD_PINGROUP(pg_name, ctl, pull, drv)	\
@@ -2230,8 +2234,8 @@ static const struct msm_pingroup sdmshrike_groups[] = {
 	[187] = PINGROUP(187, SOUTH1, NA, NA, NA, NA, NA, NA, NA, NA, NA),
 	[188] = PINGROUP(188, SOUTH1, NA, NA, NA, NA, NA, NA, NA, NA, NA),
 	[189] = PINGROUP(189, SOUTH1, dp_hot, NA, NA, NA, NA, NA, NA, NA, NA),
-	[190] = UFS_RESET(ufs_reset, 0xdb6004),
-	[191] = UFS_RESET(ufs0_reset, 0xdc7004),
+	[190] = UFS_RESET(ufs_reset, 0xdb6000),
+	[191] = UFS_RESET(ufs0_reset, 0xdc7000),
 	[192] = SDC_QDSD_PINGROUP(sdc2_clk, 0x9b2000, 14, 6),
 	[193] = SDC_QDSD_PINGROUP(sdc2_cmd, 0x9b2000, 11, 3),
 	[194] = SDC_QDSD_PINGROUP(sdc2_data, 0x9b2000, 9, 0),
@@ -2310,6 +2314,37 @@ static int sdmshrike_pinctrl_gpio_irq_map_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int sdmshrike_pinctrl_dirconn_list_probe(struct platform_device *pdev)
+{
+	int ret, n, dirconn_list_count, m;
+	struct device_node *np = pdev->dev.of_node;
+
+	n = of_property_count_elems_of_size(np, "qcom,dirconn-list",
+					sizeof(u32));
+	if (n <= 0 || n % 2)
+		return -EINVAL;
+
+	m = ARRAY_SIZE(sdmshrike_dir_conn) - 1;
+
+	dirconn_list_count = n / 2;
+
+	for (n = 0; n < dirconn_list_count; n++) {
+		ret = of_property_read_u32_index(np, "qcom,dirconn-list",
+						n * 2 + 0,
+						&sdmshrike_dir_conn[m].gpio);
+		if (ret)
+			return ret;
+		ret = of_property_read_u32_index(np, "qcom,dirconn-list",
+						n * 2 + 1,
+						&sdmshrike_dir_conn[m].irq);
+		if (ret)
+			return ret;
+		m--;
+	}
+
+	return 0;
+}
+
 static int sdmshrike_pinctrl_probe(struct platform_device *pdev)
 {
 	int len, ret;
@@ -2319,6 +2354,15 @@ static int sdmshrike_pinctrl_probe(struct platform_device *pdev)
 		if (ret) {
 			dev_err(&pdev->dev,
 				"Unable to parse GPIO IRQ map\n");
+			return ret;
+		}
+	}
+
+	if (of_find_property(pdev->dev.of_node, "qcom,dirconn-list", &len)) {
+		ret = sdmshrike_pinctrl_dirconn_list_probe(pdev);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"Unable to parse Direct Connect List\n");
 			return ret;
 		}
 	}

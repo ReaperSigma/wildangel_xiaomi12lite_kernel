@@ -245,7 +245,57 @@ out:
 	return err;
 }
 
+static void ufshcd_parse_delay_ssu_flag(struct ufs_hba *hba)
+{
+	if (device_property_read_bool(hba->dev, "qcom,delay-ssu"))
+		hba->delay_ssu = true;
+	else
+		hba->delay_ssu = false;
+}
+
 #ifdef CONFIG_PM
+
+#if defined(CONFIG_SCSI_UFSHCD_QTI)
+/**
+ * ufshcd_pltfrm_restore - restore power management function
+ * @dev: pointer to device handle
+ *
+ * Returns 0 if successful
+ * Returns non-zero otherwise
+ */
+int ufshcd_pltfrm_restore(struct device *dev)
+{
+	return ufshcd_system_restore(dev_get_drvdata(dev));
+}
+EXPORT_SYMBOL(ufshcd_pltfrm_restore);
+
+/**
+ * ufshcd_pltfrm_freeze - freeze power management function
+ * @dev: pointer to device handle
+ *
+ * Returns 0 if successful
+ * Returns non-zero otherwise
+ */
+int ufshcd_pltfrm_freeze(struct device *dev)
+{
+	return ufshcd_system_freeze(dev_get_drvdata(dev));
+}
+EXPORT_SYMBOL(ufshcd_pltfrm_freeze);
+
+/**
+ * ufshcd_pltfrm_thaw - freeze power management function
+ * @dev: pointer to device handle
+ *
+ * Returns 0 if successful
+ * Returns non-zero otherwise
+ */
+int ufshcd_pltfrm_thaw(struct device *dev)
+{
+	return ufshcd_system_thaw(dev_get_drvdata(dev));
+}
+EXPORT_SYMBOL(ufshcd_pltfrm_thaw);
+
+#endif /* CONFIG_SCSI_UFSHCD_QTI */
 /**
  * ufshcd_pltfrm_suspend - suspend power management function
  * @dev: pointer to device handle
@@ -459,6 +509,8 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 		goto dealloc_host;
 	}
 
+	ufshcd_parse_delay_ssu_flag(hba);
+
 	ufshcd_init_lanes_per_dir(hba);
 
 	err = ufshcd_init(hba, mmio_base, irq);
@@ -466,8 +518,6 @@ int ufshcd_pltfrm_init(struct platform_device *pdev,
 		dev_err(dev, "Initialization failed\n");
 		goto dealloc_host;
 	}
-
-	platform_set_drvdata(pdev, hba);
 
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);

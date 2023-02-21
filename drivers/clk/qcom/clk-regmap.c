@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2014, 2019-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014, 2019-2021 The Linux Foundation. All rights reserved.
  */
 
 #include <linux/device.h>
@@ -12,6 +12,7 @@
 #include "clk-regmap.h"
 
 static LIST_HEAD(clk_regmap_list);
+static DEFINE_SPINLOCK(clk_regmap_lock);
 
 /**
  * clk_is_enabled_regmap - standard is_enabled() for regmap users
@@ -193,7 +194,7 @@ EXPORT_SYMBOL(clk_post_change_regmap);
 int clk_prepare_regmap(struct clk_hw *hw)
 {
 	struct clk_regmap *rclk = to_clk_regmap(hw);
-	int rate = clk_hw_get_rate(hw);
+	unsigned long rate = clk_hw_get_rate(hw);
 	int vdd_level;
 
 	if (!rclk->vdd_data.vdd_class)
@@ -246,14 +247,20 @@ EXPORT_SYMBOL(clk_unprepare_regmap);
 bool clk_is_regmap_clk(struct clk_hw *hw)
 {
 	struct clk_regmap *rclk;
+	bool is_regmap_clk = false;
 
 	if (hw) {
-		list_for_each_entry(rclk, &clk_regmap_list, list_node)
-			if (&rclk->hw  == hw)
-				return true;
+		spin_lock(&clk_regmap_lock);
+		list_for_each_entry(rclk, &clk_regmap_list, list_node) {
+			if (&rclk->hw == hw) {
+				is_regmap_clk = true;
+				break;
+			}
+		}
+		spin_unlock(&clk_regmap_lock);
 	}
 
-	return false;
+	return is_regmap_clk;
 }
 EXPORT_SYMBOL(clk_is_regmap_clk);
 
@@ -288,8 +295,11 @@ int devm_clk_register_regmap(struct device *dev, struct clk_regmap *rclk)
 	}
 
 	ret = devm_clk_hw_register(dev, &rclk->hw);
-	if (!ret)
+	if (!ret) {
+		spin_lock(&clk_regmap_lock);
 		list_add(&rclk->list_node, &clk_regmap_list);
+		spin_unlock(&clk_regmap_lock);
+	}
 
 	return ret;
 }
@@ -328,3 +338,19 @@ void clk_runtime_put_regmap(struct clk_regmap *rclk)
 		pm_runtime_put_sync(rclk->dev);
 }
 EXPORT_SYMBOL(clk_runtime_put_regmap);
+
+void clk_restore_critical_clocks(struct device *dev)
+{
+	struct qcom_cc_desc *desc = dev_get_drvdata(dev);
+	struct regmap *regmap = dev_get_regmap(dev, NULL);
+	struct critical_clk_offset *cclks = desc->critical_clk_en;
+	int i;
+
+	if (!regmap)
+		return;
+
+	for (i = 0; i < desc->num_critical_clk; i++)
+		regmap_update_bits(regmap, cclks[i].offset, cclks[i].mask,
+					 cclks[i].mask);
+}
+EXPORT_SYMBOL(clk_restore_critical_clocks);

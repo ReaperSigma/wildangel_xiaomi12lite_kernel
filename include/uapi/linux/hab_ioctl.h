@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
- * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2018, 2021, The Linux Foundation. All rights reserved.
  */
 #ifndef _HAB_IOCTL_H
 #define _HAB_IOCTL_H
@@ -18,6 +18,7 @@ struct hab_recv {
 	__u64 data;
 	__s32 vcid;
 	__u32 sizebytes;
+	__u32 timeout;
 	__u32 flags;
 };
 
@@ -70,6 +71,10 @@ struct hab_info {
 	__u64 names;
 	__u32 namesize; /* single name length */
 	__u32 flags;
+};
+
+struct vhost_hab_config {
+	__u8 vm_name[32];
 };
 
 #define HAB_IOC_TYPE 0x0A

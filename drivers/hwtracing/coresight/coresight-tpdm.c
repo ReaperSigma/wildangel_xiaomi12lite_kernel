@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -323,12 +323,18 @@ static void __tpdm_config_dsb_msr(struct tpdm_drvdata *drvdata)
 
 static void __tpdm_config_cmb_msr(struct tpdm_drvdata *drvdata)
 {
-	int i;
+	int i, ret;
+	u32 msr_cnt;
+	struct device_node *node = drvdata->dev->of_node;
 
 	if (!drvdata->msr_support)
 		return;
 
-	for (i = 0; i < TPDM_CMB_MAX_MSR; i++)
+	ret = of_property_read_u32(node, "qcom,cmb-msr-cnt", &msr_cnt);
+	if (ret)
+		msr_cnt = TPDM_CMB_MAX_MSR;
+
+	for (i = 0; i < msr_cnt; i++)
 		tpdm_writel(drvdata, drvdata->cmb->msr[i], TPDM_CMB_MSR(i));
 }
 
@@ -4238,6 +4244,38 @@ static int tpdm_probe(struct amba_device *adev, const struct amba_id *id)
 	return 0;
 }
 
+#ifdef CONFIG_DEEPSLEEP
+static int tpdm_suspend(struct device *dev)
+{
+	struct tpdm_drvdata *drvdata = dev_get_drvdata(dev);
+
+	coresight_disable(drvdata->csdev);
+
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_HIBERNATION
+static int tpdm_freeze(struct device *dev)
+{
+	struct tpdm_drvdata *drvdata = dev_get_drvdata(dev);
+
+	coresight_disable(drvdata->csdev);
+
+	return 0;
+}
+#endif
+
+static const struct dev_pm_ops tpdm_dev_pm_ops = {
+#ifdef CONFIG_DEEPSLEEP
+	.suspend = tpdm_suspend,
+#endif
+#ifdef CONFIG_HIBERNATION
+	.freeze  = tpdm_freeze,
+#endif
+};
+
+
 static struct amba_id tpdm_ids[] = {
 	{
 		.id     = 0x0003b968,
@@ -4252,6 +4290,7 @@ static struct amba_driver tpdm_driver = {
 		.name   = "coresight-tpdm",
 		.owner	= THIS_MODULE,
 		.suppress_bind_attrs = true,
+		.pm	= &tpdm_dev_pm_ops,
 	},
 	.probe          = tpdm_probe,
 	.id_table	= tpdm_ids,

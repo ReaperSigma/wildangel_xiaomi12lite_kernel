@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef __HAB_H
 #define __HAB_H
@@ -46,6 +47,7 @@ enum hab_payload_type {
 #define DEVICE_GFX_NAME "hab_ogles"
 #define DEVICE_VID_NAME "hab_vid"
 #define DEVICE_VID2_NAME "hab_vid2"
+#define DEVICE_VID3_NAME "hab_vid3"
 #define DEVICE_MISC_NAME "hab_misc"
 #define DEVICE_QCPE1_NAME "hab_qcpe_vm1"
 #define DEVICE_CLK1_NAME "hab_clock_vm1"
@@ -58,9 +60,20 @@ enum hab_payload_type {
 #define DEVICE_XVM1_NAME "hab_xvm1"
 #define DEVICE_XVM2_NAME "hab_xvm2"
 #define DEVICE_XVM3_NAME "hab_xvm3"
+#define DEVICE_VNW1_NAME "hab_vnw1"
+#define DEVICE_EXT1_NAME "hab_ext1"
+
+#define HABCFG_MMID_NUM        26
+#define HAB_MMID_ALL_AREA      0
 
 /* make sure concascaded name is less than this value */
 #define MAX_VMID_NAME_SIZE 30
+
+/*
+ * The maximum value of payload_count in struct export_desc
+ * Max u32_t size_bytes from hab_ioctl.h(0xFFFFFFFF) / page size(0x1000)
+ */
+#define MAX_EXP_PAYLOAD_COUNT 0xFFFFF
 
 #define HABCFG_FILE_SIZE_MAX   256
 #define HABCFG_MMID_AREA_MAX   (MM_ID_MAX/100)
@@ -93,17 +106,22 @@ enum hab_payload_type {
 	((settings)->vmid_mmid_list[_vmid_].is_listener[_mmid_])
 
 struct hab_header {
-	uint32_t id_type_size;
+	uint32_t id_type;
+	uint32_t payload_size;
 	uint32_t session_id;
 	uint32_t signature;
 	uint32_t sequence;
 } __packed;
 
 /* "Size" of the HAB_HEADER_ID and HAB_VCID_ID must match */
-#define HAB_HEADER_SIZE_SHIFT 0
 #define HAB_HEADER_TYPE_SHIFT 16
 #define HAB_HEADER_ID_SHIFT 20
-#define HAB_HEADER_SIZE_MASK 0x0000FFFF
+/*
+ * On HQX platforms, the maximum payload size is
+ * PIPE_SHMEM_SIZE - sizeof(hab_header)
+ * 500KB is big enough for now and leave a margin for other usage
+ */
+#define HAB_HEADER_SIZE_MAX  0x0007D000
 #define HAB_HEADER_TYPE_MASK 0x000F0000
 #define HAB_HEADER_ID_MASK   0xFFF00000
 #define HAB_HEADER_INITIALIZER {0}
@@ -125,38 +143,35 @@ struct hab_header {
 	((header).session_id = (sid))
 
 #define HAB_HEADER_SET_SIZE(header, size) \
-	((header).id_type_size = ((header).id_type_size & \
-			(~HAB_HEADER_SIZE_MASK)) | \
-			(((size) << HAB_HEADER_SIZE_SHIFT) & \
-			HAB_HEADER_SIZE_MASK))
+	((header).payload_size = (size))
 
 #define HAB_HEADER_SET_TYPE(header, type) \
-	((header).id_type_size = ((header).id_type_size & \
+	((header).id_type = ((header).id_type & \
 			(~HAB_HEADER_TYPE_MASK)) | \
 			(((type) << HAB_HEADER_TYPE_SHIFT) & \
 			HAB_HEADER_TYPE_MASK))
 
 #define HAB_HEADER_SET_ID(header, id) \
-	((header).id_type_size = ((header).id_type_size & \
+	((header).id_type = ((header).id_type & \
 			(~HAB_HEADER_ID_MASK)) | \
 			((HAB_VCID_GET_ID(id) << HAB_HEADER_ID_SHIFT) & \
 			HAB_HEADER_ID_MASK))
 
 #define HAB_HEADER_GET_SIZE(header) \
-	(((header).id_type_size & \
-		HAB_HEADER_SIZE_MASK) >> HAB_HEADER_SIZE_SHIFT)
+	((header).payload_size)
 
 #define HAB_HEADER_GET_TYPE(header) \
-	(((header).id_type_size & \
+	(((header).id_type & \
 		HAB_HEADER_TYPE_MASK) >> HAB_HEADER_TYPE_SHIFT)
 
 #define HAB_HEADER_GET_ID(header) \
-	((((header).id_type_size & HAB_HEADER_ID_MASK) >> \
+	((((header).id_type & HAB_HEADER_ID_MASK) >> \
 	(HAB_HEADER_ID_SHIFT - HAB_VCID_ID_SHIFT)) & HAB_VCID_ID_MASK)
 
 #define HAB_HEADER_GET_SESSION_ID(header) ((header).session_id)
 
 #define HAB_HS_TIMEOUT (10*1000*1000)
+#define HAB_HEAD_SIGNATURE 0xBEE1BEE1
 
 struct physical_channel {
 	struct list_head node;
@@ -227,6 +242,7 @@ struct hab_export_ack_recvd {
 struct hab_message {
 	struct list_head node;
 	size_t sizebytes;
+	bool scatter;
 	uint32_t sequence_rx;
 	uint32_t data[];
 };
@@ -237,7 +253,7 @@ struct hab_device {
 	uint32_t id;
 	struct list_head pchannels;
 	int pchan_cnt;
-	spinlock_t pchan_lock;
+	rwlock_t pchan_lock;
 	struct list_head openq_list; /* received */
 	spinlock_t openlock;
 	wait_queue_head_t openq;
@@ -398,6 +414,7 @@ int hab_vchan_recv(struct uhab_context *ctx,
 		struct hab_message **msg,
 		int vcid,
 		int *rsize,
+		unsigned int timeout,
 		unsigned int flags);
 void hab_vchan_stop(struct virtual_channel *vchan);
 void hab_vchans_stop(struct physical_channel *pchan);
@@ -459,7 +476,8 @@ int habmm_imp_hyp_map_check(void *imp_ctx, struct export_desc *exp);
 
 void hab_msg_free(struct hab_message *message);
 int hab_msg_dequeue(struct virtual_channel *vchan,
-		struct hab_message **msg, int *rsize, unsigned int flags);
+		struct hab_message **msg, int *rsize, unsigned int timeout,
+		unsigned int flags);
 
 int hab_msg_recv(struct physical_channel *pchan,
 		struct hab_header *header);
@@ -572,7 +590,6 @@ int hab_stat_deinit(struct hab_driver *drv);
 int hab_stat_show_vchan(struct hab_driver *drv, char *buf, int sz);
 int hab_stat_show_ctx(struct hab_driver *drv, char *buf, int sz);
 int hab_stat_show_expimp(struct hab_driver *drv, int pid, char *buf, int sz);
-
 int hab_stat_init_sub(struct hab_driver *drv);
 int hab_stat_deinit_sub(struct hab_driver *drv);
 
@@ -616,6 +633,10 @@ int dump_hab_open(void);
 void dump_hab_close(void);
 int dump_hab_buf(void *buf, int size);
 void hab_pipe_read_dump(struct physical_channel *pchan);
-void dump_hab(void);
-void dump_hab_wq(void *hyp_data);
+void dump_hab(int mmid);
+void dump_hab_wq(struct physical_channel *pchan);
+int hab_stat_log(struct physical_channel **pchans, int pchan_cnt, char *dest,
+			int dest_size);
+int hab_stat_buffer_print(char *dest,
+		int dest_size, const char *fmt, ...);
 #endif /* __HAB_H */

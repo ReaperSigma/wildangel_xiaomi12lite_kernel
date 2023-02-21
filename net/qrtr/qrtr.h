@@ -11,6 +11,9 @@ struct sk_buff;
 #define QRTR_EP_NET_ID_AUTO (1)
 
 #define QRTR_DEL_PROC_MAGIC	0xe111
+#define AID_VENDOR_QRTR	KGIDT_INIT(2906)
+
+#define MAX_NON_WAKE_SVC_LEN    5
 
 /**
  * struct qrtr_endpoint - endpoint handle
@@ -27,7 +30,7 @@ struct qrtr_endpoint {
 };
 
 int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
-			   bool rt);
+			   bool rt, u32 *svc_arr);
 
 void qrtr_endpoint_unregister(struct qrtr_endpoint *ep);
 
@@ -39,5 +42,8 @@ void qrtr_ns_remove(void);
 
 int qrtr_peek_pkt_size(const void *data);
 
-unsigned int qrtr_get_service_id(unsigned int node_id, unsigned int port_id);
+int qrtr_get_service_id(unsigned int node_id, unsigned int port_id);
+
+int qrtr_get_header_size(const void *data);
+
 #endif

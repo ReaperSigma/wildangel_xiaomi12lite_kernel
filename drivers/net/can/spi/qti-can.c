@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved. */
+/* Copyright (c) 2015-2021, The Linux Foundation. All rights reserved. */
 
 #include <linux/interrupt.h>
 #include <linux/module.h>
@@ -17,6 +17,8 @@
 #include <linux/pm.h>
 #include <asm/arch_timer.h>
 #include <asm/div64.h>
+#include <linux/suspend.h>
+#include <linux/pm_runtime.h>
 
 #define DEBUG_QTI_CAN	0
 #if DEBUG_QTI_CAN == 1
@@ -32,6 +34,7 @@
 #define MAX_TX_BUFFERS			1
 #define XFER_BUFFER_SIZE		64
 #define RX_ASSEMBLY_BUFFER_SIZE		128
+#define RX_FD_BUFFER_SIZE		82
 #define QTI_CAN_FW_QUERY_RETRY_COUNT	3
 #define DRIVER_MODE_RAW_FRAMES		0
 #define DRIVER_MODE_PROPERTIES		1
@@ -40,8 +43,17 @@
 #define EUPGRADE			140
 #define QTIMER_DIV				192
 #define QTIMER_MUL				10000
+#define TIMESTAMP_PRINT_CNTR	10
 #define TIME_OFFSET_MAX_THD		30
 #define TIME_OFFSET_MIN_THD		-30
+#define CAN_FD_HEADER			14
+#define CAN_FD_PACKET_DATA		32
+#define CAN_FD_PACKET_SIZE		46
+#define CAN_STANDARD_PACKET_SIZE	22
+
+static int static_pos_checksum_en;
+static int dynamic_pos_checksum_en;
+static int checksum_enable;
 
 struct qti_can {
 	struct net_device	**netdev;
@@ -53,6 +65,7 @@ struct qti_can {
 	atomic_t msg_seq;
 	char *assembly_buffer;
 	u8 assembly_buffer_size;
+	char *fd_buffer;
 	atomic_t netif_queue_stop;
 	struct completion response_completion;
 	int wait_cmd;
@@ -149,7 +162,7 @@ struct can_write_req {
 	u8 can_if;
 	u32 mid;
 	u8 dlc;
-	u8 data[8];
+	u8 data[CAN_FD_PACKET_DATA];
 } __packed;
 
 struct can_write_resp {
@@ -172,6 +185,15 @@ struct can_receive_frame {
 	__le32 mid;
 	u8 dlc;
 	u8 data[8];
+} __packed;
+
+struct canfd_receive_frame {
+	u8 can_if;
+	__le64 ts;
+	__le32 mid;
+	u8 dlc;
+	//u8 flags; //1->0x80-enable_can_fd, 2->0x40 canfd-esi, 3->0x20 brs 4->0x10 iso 5-8 reserved
+	u8 data[CAN_FD_PACKET_DATA];
 } __packed;
 
 struct can_config_bit_timing {
@@ -297,6 +319,71 @@ static inline u64 qtimer_time(void)
 	return mul_u64_u32_div(qt_count, QTIMER_MUL, QTIMER_DIV);
 }
 
+static void qti_canfd_receive_frame(struct qti_can *priv_data,
+				    struct canfd_receive_frame *frame)
+{
+	struct canfd_frame *cf;
+	struct sk_buff *skb;
+	struct skb_shared_hwtstamps *skt;
+	ktime_t nsec;
+	struct net_device *netdev;
+	int i;
+	struct device *dev;
+	s64 ts_offset_corrected;
+	static u16 buff_frames_disc_cntr;
+	static u8 disp_disc_cntr = 1;
+
+	dev = &priv_data->spidev->dev;
+	if (frame->can_if >= priv_data->max_can_channels) {
+		LOGDE("qti_can rcv error. Channel is %d\n", frame->can_if);
+		return;
+	}
+
+	netdev = priv_data->netdev[frame->can_if];
+	skb = alloc_canfd_skb(netdev, &cf);
+	if (!skb) {
+		LOGDE("skb alloc failed. frame->can_if %d\n", frame->can_if);
+		return;
+	}
+
+	LOGDI("rcv frame %d %llu %x %d %x %x %x %x %x %x %x %x\n",
+	      frame->can_if, frame->ts, frame->mid, frame->dlc,
+	      frame->data[0], frame->data[1], frame->data[2], frame->data[3],
+	      frame->data[4], frame->data[5], frame->data[6], frame->data[7]);
+	cf->can_id = le32_to_cpu(frame->mid);
+	cf->len = frame->dlc;
+	//cf->flags = (frame->flags & 0x60)>>5; //select canfd esi and canfd brs
+
+	for (i = 0; i < cf->len; i++)
+		cf->data[i] = frame->data[i];
+
+	ts_offset_corrected = le64_to_cpu(frame->ts)
+		+ priv_data->time_diff;
+
+	/* CAN frames which are received before SOC powers up are discarded */
+	if (ts_offset_corrected > 0) {
+		if (disp_disc_cntr == 1) {
+			dev_info(&priv_data->spidev->dev,
+				 "No of buff frames discarded is %d\n",
+				 buff_frames_disc_cntr);
+			disp_disc_cntr = 0;
+		}
+
+		nsec = ms_to_ktime(ts_offset_corrected);
+		skt = skb_hwtstamps(skb);
+		skt->hwtstamp = nsec;
+		skb->tstamp = nsec;
+
+		netif_rx(skb);
+
+		LOGDI("hwtstamp: %lld\n", ktime_to_ms(skt->hwtstamp));
+		netdev->stats.rx_packets++;
+	} else {
+		buff_frames_disc_cntr++;
+		dev_kfree_skb(skb);
+	}
+}
+
 static void qti_can_receive_frame(struct qti_can *priv_data,
 				  struct can_receive_frame *frame)
 {
@@ -357,7 +444,7 @@ static void qti_can_receive_frame(struct qti_can *priv_data,
 		netdev->stats.rx_packets++;
 	} else {
 		buff_frames_disc_cntr++;
-		dev_kfree_skb(skb);
+		kfree_skb(skb);
 	}
 }
 
@@ -409,27 +496,35 @@ static int qti_can_process_response(struct qti_can *priv_data,
 	static s64 prev_time_diff;
 	static u8 first_offset_est = 1;
 	s64 offset_variation = 0;
+	static u8 offset_print_cntr;
+	struct canfd_receive_frame *frame;
 
 	LOGDI("<%x %2d [%d]\n", resp->cmd, resp->len, resp->seq);
 	if (resp->cmd == CMD_CAN_RECEIVE_FRAME) {
-		struct can_receive_frame *frame =
-				(struct can_receive_frame *)&resp->data;
-		if ((resp->len - (frame->dlc + sizeof(frame->dlc))) <
-			(sizeof(*frame) - (sizeof(frame->dlc)
-			+ sizeof(frame->data)))) {
-			LOGDE("len:%d, size:%zu\n", resp->len, sizeof(*frame));
-			LOGDE("Check the f/w version & upgrade to latest!!\n");
-			ret = -EUPGRADE;
-			goto exit;
-		}
-		if (resp->len > length) {
-			/* Error. This should never happen */
-			LOGDE("%s error: Saving %d bytes\n", __func__, length);
-			memcpy(priv_data->assembly_buffer, (char *)resp,
-			       length);
-			priv_data->assembly_buffer_size = length;
+		if (resp->len > CAN_STANDARD_PACKET_SIZE) {
+			LOGDI("can fd receive\n");
+			frame = (struct canfd_receive_frame *)&resp->data;
+			qti_canfd_receive_frame(priv_data, frame);
 		} else {
-			qti_can_receive_frame(priv_data, frame);
+			struct can_receive_frame *frame =
+					(struct can_receive_frame *)&resp->data;
+			if ((resp->len - (frame->dlc + sizeof(frame->dlc))) <
+				(sizeof(*frame) - (sizeof(frame->dlc)
+				+ sizeof(frame->data)))) {
+				LOGDE("len:%d, size:%zu\n", resp->len, sizeof(*frame));
+				LOGDE("Check the f/w version & upgrade to latest!!\n");
+				ret = -EUPGRADE;
+				goto exit;
+			}
+			if (resp->len > length) {
+				/* Error. This should never happen */
+				LOGDE("%s error: Saving %d bytes\n", __func__, length);
+				memcpy(priv_data->assembly_buffer, (char *)resp,
+				       length);
+				priv_data->assembly_buffer_size = length;
+			} else {
+				qti_can_receive_frame(priv_data, frame);
+			}
 		}
 	} else if (resp->cmd == CMD_PROPERTY_READ) {
 		struct vehicle_property *property =
@@ -446,6 +541,31 @@ static int qti_can_process_response(struct qti_can *priv_data,
 		}
 	} else if (resp->cmd  == CMD_GET_FW_VERSION) {
 		struct can_fw_resp *fw_resp = (struct can_fw_resp *)resp->data;
+
+		if (fw_resp->maj == 4) {
+			if (fw_resp->min == 0) {
+				if (fw_resp->sub_min == 5 || fw_resp->sub_min == 6) {
+					dev_info(&priv_data->spidev->dev, "static position checksum enabled\n");
+					static_pos_checksum_en = 1;
+					checksum_enable = 1;
+				}
+			} else if (fw_resp->min == 1) {
+				dev_info(&priv_data->spidev->dev, "static position checksum enabled\n");
+				static_pos_checksum_en = 1;
+				checksum_enable = 1;
+				dev_info(&priv_data->spidev->dev, "can-fd support can0 enabled\n");
+			} else if (fw_resp->min > 1) {
+				dev_info(&priv_data->spidev->dev, "dynamic position checksum enabled\n");
+				dynamic_pos_checksum_en = 1;
+				checksum_enable = 1;
+				dev_info(&priv_data->spidev->dev, "can-fd support can0 enabled\n");
+			}
+		} else if (fw_resp->maj > 4) {
+			dev_info(&priv_data->spidev->dev, "dynamic position checksum enabled\n");
+			dynamic_pos_checksum_en = 1;
+			checksum_enable = 1;
+			dev_info(&priv_data->spidev->dev, "can-fd support can0 enabled\n");
+		}
 
 		dev_info(&priv_data->spidev->dev, "fw %d.%d.%d\n",
 			 fw_resp->maj, fw_resp->min, fw_resp->sub_min);
@@ -489,12 +609,15 @@ static int qti_can_process_response(struct qti_can *priv_data,
 
 		if (offset_variation > TIME_OFFSET_MAX_THD ||
 		    offset_variation < TIME_OFFSET_MIN_THD) {
-			dev_info(&priv_data->spidev->dev,
-				 "Off Exceeded: Curr off is %lld\n",
-				 priv_data->time_diff);
-			dev_info(&priv_data->spidev->dev,
-				 "Prev off is %lld\n",
+			if (offset_print_cntr < TIMESTAMP_PRINT_CNTR) {
+				dev_info(&priv_data->spidev->dev,
+					 "Off Exceeded: Curr off is %lld\n",
+					 priv_data->time_diff);
+				dev_info(&priv_data->spidev->dev,
+					 "Prev off is %lld\n",
 				prev_time_diff);
+				offset_print_cntr++;
+			}
 			/* Set curr off to prev off if */
 			/* variation is beyond threshold */
 			priv_data->time_diff = prev_time_diff;
@@ -514,14 +637,87 @@ exit:
 	return ret;
 }
 
+static int qti_can_fd_process_rx(struct qti_can *priv_data, char *rx_buf)
+{
+	struct spi_miso *resp;
+	int ret = 0;
+	/* u64 rx_buf_idx, idx = 0; */
+	int i = 0;
+	u8 rx_checksum = 0;
+	int checksum_rx_len = 0;
+
+	struct can_receive_frame *frame;
+	void *data;
+	struct spi_miso *resp_fd;
+
+	resp = (struct spi_miso *)rx_buf;
+	LOGDI("spi -> cmd %X len %d seq %d\n", resp->cmd, resp->len, resp->seq);
+	if (static_pos_checksum_en)
+		checksum_rx_len = XFER_BUFFER_SIZE - 2;
+	if (resp->seq == 0) {
+		if (dynamic_pos_checksum_en)
+			checksum_rx_len = CAN_FD_PACKET_SIZE + 4;
+
+		for (i = 0; i < checksum_rx_len; i++)
+			rx_checksum ^= rx_buf[i];
+
+		if (!checksum_enable)
+			rx_checksum = rx_buf[checksum_rx_len];
+
+		if (rx_checksum == rx_buf[checksum_rx_len]) {
+			//store canfd frame in buffer;
+			memset(priv_data->fd_buffer, 0, RX_FD_BUFFER_SIZE);
+			memcpy(priv_data->fd_buffer, resp, CAN_FD_PACKET_SIZE + 4);
+		} else {
+			LOGDE("checksum validation failed\n");
+			LOGDE("cmd_id: %x chksum_rx_calc: %x chksum_rx: %x\n chksum_rx_len: %d\n",
+			      resp->cmd, rx_checksum, rx_buf[checksum_rx_len], checksum_rx_len);
+			ret = -EINVAL;
+			}
+	} else if (resp->seq == 1) {
+		if (dynamic_pos_checksum_en)
+			checksum_rx_len = resp->len - CAN_FD_PACKET_DATA + 4;
+
+		for (i = 0; i < checksum_rx_len; i++)
+			rx_checksum ^= rx_buf[i];
+
+		if (!checksum_enable)
+			rx_checksum = rx_buf[checksum_rx_len];
+
+		if (rx_checksum == rx_buf[checksum_rx_len]) {
+			// add data of second spi packet frame to resp_fd
+			frame = (struct can_receive_frame *)resp->data;
+			memcpy((priv_data->fd_buffer) + CAN_FD_PACKET_SIZE + 4,
+			       frame->data, frame->dlc - CAN_FD_PACKET_DATA);
+			data = priv_data->fd_buffer;
+			resp_fd = (struct spi_miso *)data;
+			ret = qti_can_process_response(priv_data, resp_fd, 0);
+		} else {
+			LOGDE("checksum validation failed\n");
+			LOGDE("cmd_id: %x chksum_rx_calc: %x chksum_rx: %x\n chksum_rx_len: %d\n",
+			      resp->cmd, rx_checksum, rx_buf[checksum_rx_len], checksum_rx_len);
+			ret = -EINVAL;
+		}
+	}
+	return ret;
+}
+
 static int qti_can_process_rx(struct qti_can *priv_data, char *rx_buf)
 {
 	struct spi_miso *resp;
-	struct device *dev;
 	int length_processed = 0, actual_length = priv_data->xfer_length;
 	int ret = 0;
+	/* u64 rx_buf_idx, idx = 0; */
+	int i = 0;
+	u8 rx_checksum = 0;
+	u8 rx_checksum_rcvd = 0;
+	int checksum_rx_len = 0;
 
-	dev = &priv_data->spidev->dev;
+	if (rx_buf[0] == CMD_CAN_RECEIVE_FRAME && rx_buf[1] > CAN_FD_PACKET_SIZE) {
+		ret = qti_can_fd_process_rx(priv_data, rx_buf);
+		return ret;
+	}
+
 	while (length_processed < actual_length) {
 		int length_left = actual_length - length_processed;
 		int length = 0; /* length of consumed chunk */
@@ -548,7 +744,9 @@ static int qti_can_process_rx(struct qti_can *priv_data, char *rx_buf)
 		} else {
 			data = rx_buf + length_processed;
 			resp = (struct spi_miso *)data;
-			if (resp->cmd == 0x00 || resp->cmd == 0xFF) {
+			if (resp->cmd == 0x00 || resp->cmd == 0xFF ||
+			    resp->cmd < 0x81 || resp->cmd > 0x9F ||
+				(resp->cmd > 0x8C && resp->cmd < 0x95)) {
 				/* special case. ignore cmd==0x00, 0xFF  */
 				length_processed += 1;
 				continue;
@@ -562,15 +760,58 @@ static int qti_can_process_rx(struct qti_can *priv_data, char *rx_buf)
 		    resp->len + sizeof(*resp) <= length_left) {
 			struct spi_miso *resp =
 					(struct spi_miso *)data;
-			ret = qti_can_process_response(priv_data, resp,
-						       length_left);
+
+			char *temp_data = (char *)data;
+
+			if (resp->cmd == CMD_CAN_RECEIVE_FRAME && static_pos_checksum_en)
+				/* Two CAN frames can be received in single spi packet*/
+				/* 63rd byte is checksum */
+				checksum_rx_len = XFER_BUFFER_SIZE - 2;
+			else if (dynamic_pos_checksum_en &&
+				 resp->len > CAN_STANDARD_PACKET_SIZE)
+				/* This is a fix for dynamic checksum change */
+				/* specific to CAN-FD frames with data length */
+				/* 12/16/20/24 bytes as v4.2.0 CAN FW is packing */
+				/* checksum in 50th byte (4 + 14 + 32) for the */
+				/* CAN frames with 12/16/20/24 data length */
+				checksum_rx_len = CAN_FD_PACKET_SIZE + 4;
+			else
+				checksum_rx_len = (resp->len) + 4;
+
+			if (static_pos_checksum_en) {
+				rx_checksum_rcvd = temp_data[XFER_BUFFER_SIZE - 2];
+				temp_data[XFER_BUFFER_SIZE - 2] = 0;
+			} else if (dynamic_pos_checksum_en) {
+				rx_checksum_rcvd = temp_data[checksum_rx_len];
+				temp_data[checksum_rx_len] = 0;
+			}
+			rx_checksum = 0;
+			if (checksum_enable) {
+				for (i = 0; i < checksum_rx_len; i++)
+					rx_checksum ^= temp_data[i];
+
+				if (rx_checksum == rx_checksum_rcvd) {
+					ret = qti_can_process_response(priv_data, resp,
+								       length_left);
+				} else {
+					LOGDE("checksum validation failed\n");
+					LOGDE("cmd_id: %x cs_rx_calc: %x cs_rx: %x\n cs_len: %d\n",
+					      resp->cmd, rx_checksum,
+					      rx_checksum_rcvd, checksum_rx_len);
+					ret = -EINVAL;
+				}
+			} else {
+				ret = qti_can_process_response(priv_data, resp,
+							       length_left);
+			}
+
 		} else if (length_left > 0) {
 			/* Not full message. Store however much we have for */
 			/* later assembly */
 			LOGDI("callback: Storing %d bytes of response\n",
 			      length_left);
 			memcpy(priv_data->assembly_buffer, data, length_left);
-			priv_data->assembly_buffer_size = length_left;
+			       priv_data->assembly_buffer_size = length_left;
 			break;
 		}
 	}
@@ -584,15 +825,50 @@ static int qti_can_do_spi_transaction(struct qti_can *priv_data)
 	struct spi_message *msg;
 	struct device *dev;
 	int ret;
+	int i = 0;
+	u8 tx_checksum = 0;
+	int checksum_tx_len = 0;
+	struct spi_mosi *req;
+	u64 rx_buf_idx, idx = 0;
 
 	spi = priv_data->spidev;
 	dev = &spi->dev;
-	msg = devm_kzalloc(&spi->dev, sizeof(*msg), GFP_KERNEL);
-	xfer = devm_kzalloc(&spi->dev, sizeof(*xfer), GFP_KERNEL);
+	msg = kzalloc(sizeof(*msg), GFP_KERNEL);
+	xfer = kzalloc(sizeof(*xfer), GFP_KERNEL);
 	if (!xfer || !msg)
 		return -ENOMEM;
 	LOGDI(">%x %2d [%d]\n", priv_data->tx_buf[0],
 	      priv_data->tx_buf[1], priv_data->tx_buf[2]);
+
+	if (static_pos_checksum_en || dynamic_pos_checksum_en) {
+		req = (struct spi_mosi *)(priv_data->tx_buf);
+		if (req->cmd == CMD_CAN_SEND_FRAME && static_pos_checksum_en)
+			checksum_tx_len = XFER_BUFFER_SIZE - 2;
+		else if (req->cmd == CMD_CAN_SEND_FRAME &&
+			 req->len > CAN_FD_PACKET_SIZE && req->seq == 0)
+			checksum_tx_len = CAN_FD_PACKET_SIZE + 4;
+		else if (req->cmd == CMD_CAN_SEND_FRAME &&
+			 req->len > CAN_FD_PACKET_SIZE && req->seq == 1)
+			checksum_tx_len = (req->len) - CAN_FD_PACKET_DATA + 4;
+		else
+			checksum_tx_len = (req->len) + 4;
+		for (i = 0; i < checksum_tx_len; i++)
+			tx_checksum ^= priv_data->tx_buf[i];
+
+		if (static_pos_checksum_en) {
+			priv_data->tx_buf[(XFER_BUFFER_SIZE - 2)] = tx_checksum;
+		} else if (dynamic_pos_checksum_en) {
+			if (req->cmd == CMD_CAN_SEND_FRAME &&
+			    req->len > CAN_FD_PACKET_SIZE && req->seq == 0)
+				priv_data->tx_buf[CAN_FD_PACKET_SIZE + 4] = tx_checksum;
+			else if (req->cmd == CMD_CAN_SEND_FRAME &&
+				 req->len > CAN_FD_PACKET_SIZE && req->seq == 1)
+				priv_data->tx_buf[req->len - CAN_FD_PACKET_DATA + 4] = tx_checksum;
+			else
+				priv_data->tx_buf[req->len + 4] = tx_checksum;
+		}
+	}
+
 	spi_message_init(msg);
 	spi_message_add_tail(xfer, msg);
 	xfer->tx_buf = priv_data->tx_buf;
@@ -600,15 +876,25 @@ static int qti_can_do_spi_transaction(struct qti_can *priv_data)
 	xfer->len = priv_data->xfer_length;
 	xfer->bits_per_word = priv_data->bits_per_word;
 	ret = spi_sync(spi, msg);
-	LOGDI("spi_sync ret %d data %x %x %x %x %x %x %x %x\n", ret,
-	      priv_data->rx_buf[0], priv_data->rx_buf[1],
-	      priv_data->rx_buf[2], priv_data->rx_buf[3],
-	      priv_data->rx_buf[4], priv_data->rx_buf[5],
-	      priv_data->rx_buf[6], priv_data->rx_buf[7]);
+	LOGDI("spi_sync ret %d\n", ret);
+	for (rx_buf_idx = 0; rx_buf_idx < 6; rx_buf_idx++) {
+		idx = 10 * rx_buf_idx;
+		LOGDI("%X %X %X %X %X %X %X %X %X %X\n",
+		      priv_data->rx_buf[idx + 0], priv_data->rx_buf[idx + 1],
+		      priv_data->rx_buf[idx + 2], priv_data->rx_buf[idx + 3],
+		      priv_data->rx_buf[idx + 4], priv_data->rx_buf[idx + 5],
+		      priv_data->rx_buf[idx + 6], priv_data->rx_buf[idx + 7],
+		      priv_data->rx_buf[idx + 8], priv_data->rx_buf[idx + 9]);
+	}
+	LOGDI("%X %X %X %X\n",
+	      priv_data->rx_buf[60], priv_data->rx_buf[61],
+	      priv_data->rx_buf[62], priv_data->rx_buf[63]);
 
 	if (ret == 0)
 		qti_can_process_rx(priv_data, priv_data->rx_buf);
 
+	kfree(msg);
+	kfree(xfer);
 	return ret;
 }
 
@@ -648,6 +934,9 @@ static int qti_can_query_firmware_version(struct qti_can *priv_data)
 	req->cmd = CMD_GET_FW_VERSION;
 	req->len = 0;
 	req->seq = atomic_inc_return(&priv_data->msg_seq);
+	req->data[0] = 0xAA; // checksum enable flag
+	req->data[1] = 0xAA; // can-fd enable flag
+	req->data[2] = 0xAA; // dynamic position checksum enable flag
 
 	priv_data->wait_cmd = CMD_GET_FW_VERSION;
 	priv_data->cmd_result = -1;
@@ -742,6 +1031,9 @@ static int qti_can_write(struct qti_can *priv_data,
 			 int can_channel, struct canfd_frame *cf)
 {
 	char *tx_buf, *rx_buf;
+	char fd_buf[CAN_FD_PACKET_DATA] = "";
+	bool send_fd_frame = false;
+	int data_length_left = 0, k = 0;
 	int ret, i;
 	struct spi_mosi *req;
 	struct can_write_req *req_d;
@@ -762,16 +1054,26 @@ static int qti_can_write(struct qti_can *priv_data,
 	req = (struct spi_mosi *)tx_buf;
 	if (priv_data->driver_mode == DRIVER_MODE_RAW_FRAMES) {
 		req->cmd = CMD_CAN_SEND_FRAME;
-		req->len = sizeof(struct can_write_req) + 8;
+		req->len = CAN_FD_HEADER + cf->len;
 		req->seq = atomic_inc_return(&priv_data->msg_seq);
-
 		req_d = (struct can_write_req *)req->data;
 		req_d->can_if = can_channel;
 		req_d->mid = cf->can_id;
 		req_d->dlc = cf->len;
-
-		for (i = 0; i < cf->len; i++)
-			req_d->data[i] = cf->data[i];
+		if (req_d->dlc > CAN_FD_PACKET_DATA) {
+			send_fd_frame = true;
+			for (i = 0; i < CAN_FD_PACKET_DATA; i++)
+				req_d->data[i] = cf->data[i];
+			while (i < cf->len) {
+				fd_buf[k] = cf->data[i];
+				i++;
+				k++;
+			}
+			req->seq = 0;
+		} else {
+			for (i = 0; i < cf->len; i++)
+				req_d->data[i] = cf->data[i];
+		}
 	} else if (priv_data->driver_mode == DRIVER_MODE_PROPERTIES ||
 		priv_data->driver_mode == DRIVER_MODE_AMB) {
 		req->cmd = CMD_PROPERTY_WRITE;
@@ -785,6 +1087,14 @@ static int qti_can_write(struct qti_can *priv_data,
 	}
 
 	ret = qti_can_do_spi_transaction(priv_data);
+	if (send_fd_frame) {
+		req->seq = 1;
+		data_length_left = cf->len - CAN_FD_PACKET_DATA;
+		memset(req_d->data, 0, CAN_FD_PACKET_DATA);
+		for (i = 0; i < data_length_left; i++)
+			req_d->data[i] = fd_buf[i];
+		ret = qti_can_do_spi_transaction(priv_data);
+	}
 	netdev = priv_data->netdev[can_channel];
 	netdev->stats.tx_packets++;
 	mutex_unlock(&priv_data->spi_lock);
@@ -836,7 +1146,7 @@ static void qti_can_send_can_frame(struct work_struct *ws)
 	cf = (struct canfd_frame *)tx_work->skb->data;
 	qti_can_write(priv_data, can_channel, cf);
 
-	dev_kfree_skb(tx_work->skb);
+	kfree_skb(tx_work->skb);
 	kfree(tx_work);
 }
 
@@ -921,9 +1231,7 @@ static int qti_can_data_buffering(struct net_device *netdev,
 		mutex_unlock(&priv_data->spi_lock);
 		return -EINVAL;
 	}
-	add_request = devm_kzalloc(&spi->dev,
-				   sizeof(struct qti_can_buffer),
-				   GFP_KERNEL);
+	add_request = kzalloc(sizeof(*add_request), GFP_KERNEL);
 	if (!add_request) {
 		mutex_unlock(&priv_data->spi_lock);
 		return -ENOMEM;
@@ -932,6 +1240,7 @@ static int qti_can_data_buffering(struct net_device *netdev,
 	if (copy_from_user(add_request, ifr->ifr_data,
 			   sizeof(struct qti_can_buffer))) {
 		mutex_unlock(&priv_data->spi_lock);
+		kfree(add_request);
 		return -EFAULT;
 	}
 
@@ -955,6 +1264,7 @@ static int qti_can_data_buffering(struct net_device *netdev,
 	}
 
 	ret = qti_can_do_spi_transaction(priv_data);
+	kfree(add_request);
 	mutex_unlock(&priv_data->spi_lock);
 
 	if (ret == 0 && priv_data->can_fw_cmd_timeout_req) {
@@ -1038,9 +1348,8 @@ static int qti_can_frame_filter(struct net_device *netdev,
 		return -EINVAL;
 	}
 
-	filter_request =
-		devm_kzalloc(&spi->dev, sizeof(struct can_filter_req),
-			     GFP_KERNEL);
+	filter_request = kzalloc(sizeof(*filter_request),
+				 GFP_KERNEL);
 	if (!filter_request) {
 		mutex_unlock(&priv_data->spi_lock);
 		return -ENOMEM;
@@ -1049,6 +1358,7 @@ static int qti_can_frame_filter(struct net_device *netdev,
 	if (copy_from_user(filter_request, ifr->ifr_data,
 			   sizeof(struct can_filter_req))) {
 		mutex_unlock(&priv_data->spi_lock);
+		kfree(filter_request);
 		return -EFAULT;
 	}
 
@@ -1067,6 +1377,7 @@ static int qti_can_frame_filter(struct net_device *netdev,
 	add_filter->mask = filter_request->mask;
 
 	ret = qti_can_do_spi_transaction(priv_data);
+	kfree(filter_request);
 	mutex_unlock(&priv_data->spi_lock);
 	return ret;
 }
@@ -1185,9 +1496,7 @@ static int qti_can_do_blocking_ioctl(struct net_device *netdev,
 	mutex_lock(&priv_data->spi_lock);
 	if (spi_cmd == CMD_FIRMWARE_UPGRADE_DATA ||
 	    spi_cmd == CMD_BOOT_ROM_UPGRADE_DATA) {
-		ioctl_data =
-			devm_kzalloc(&spi->dev,
-				     sizeof(struct qti_can_ioctl_req),
+		ioctl_data = kzalloc(sizeof(*ioctl_data),
 				     GFP_KERNEL);
 		if (!ioctl_data) {
 			mutex_unlock(&priv_data->spi_lock);
@@ -1197,6 +1506,7 @@ static int qti_can_do_blocking_ioctl(struct net_device *netdev,
 		if (copy_from_user(ioctl_data, ifr->ifr_data,
 				   sizeof(struct qti_can_ioctl_req))) {
 			mutex_unlock(&priv_data->spi_lock);
+			kfree(ioctl_data);
 			return -EFAULT;
 		}
 
@@ -1227,6 +1537,8 @@ static int qti_can_do_blocking_ioctl(struct net_device *netdev,
 	reinit_completion(&priv_data->response_completion);
 
 	ret = qti_can_send_spi_locked(priv_data, spi_cmd, len, data);
+
+	kfree(ioctl_data);
 	mutex_unlock(&priv_data->spi_lock);
 
 	if (ret == 0) {
@@ -1262,18 +1574,20 @@ static int qti_can_netdev_do_ioctl(struct net_device *netdev,
 		 */
 		if (ifr->ifr_data > (void __user *)IFR_DATA_OFFSET) {
 			mutex_lock(&priv_data->spi_lock);
-			mode = devm_kzalloc(&spi->dev, sizeof(int), GFP_KERNEL);
+			mode = kzalloc(sizeof(*mode), GFP_KERNEL);
 			if (!mode) {
 				mutex_unlock(&priv_data->spi_lock);
 				return -ENOMEM;
 			}
 			if (copy_from_user(mode, ifr->ifr_data, sizeof(int))) {
 				mutex_unlock(&priv_data->spi_lock);
+				kfree(mode);
 				return -EFAULT;
 			}
 			priv_data->driver_mode = *mode;
 			LOGDE("qti_can_driver_mode %d\n",
 			      priv_data->driver_mode);
+			kfree(mode);
 			mutex_unlock(&priv_data->spi_lock);
 		}
 		qti_can_send_release_can_buffer_cmd(netdev);
@@ -1380,6 +1694,12 @@ static struct qti_can *qti_can_create_priv_data(struct spi_device *spi)
 		err = -ENOMEM;
 		goto cleanup_privdata;
 	}
+	priv_data->fd_buffer = devm_kzalloc(dev, RX_FD_BUFFER_SIZE,
+					    GFP_KERNEL);
+	if (!priv_data->fd_buffer) {
+		err = -ENOMEM;
+		goto cleanup_privdata;
+	}
 
 	priv_data->tx_wq = alloc_workqueue("qti_can_tx_wq", 0, 0);
 	if (!priv_data->tx_wq) {
@@ -1419,6 +1739,30 @@ static const struct of_device_id qti_can_match_table[] = {
 	{ .compatible = "qcom,renesas,rh850" },
 	{ .compatible = "qcom,nxp,mpc5746c" },
 	{ }
+};
+
+static struct device *temp_dev;
+static int qti_can_prepare(struct device *dev);
+static int qti_can_resume(struct device *dev);
+
+static int suspend_resume_notifier(struct notifier_block *nb,
+				   unsigned long event, void *unused)
+{
+	switch (event) {
+	case PM_SUSPEND_PREPARE:
+		qti_can_prepare(temp_dev);
+		break;
+	case PM_POST_SUSPEND:
+		qti_can_resume(temp_dev);
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block qti_can_pm_nb = {
+	.notifier_call = suspend_resume_notifier,
+	.priority = INT_MAX,
 };
 
 static int qti_can_probe(struct spi_device *spi)
@@ -1549,6 +1893,12 @@ static int qti_can_probe(struct spi_device *spi)
 	}
 	dev_info(dev, "Request irq %d ret %d\n", spi->irq, err);
 
+	temp_dev = &priv_data->spidev->dev;
+	err = register_pm_notifier(&qti_can_pm_nb);
+	if (err) {
+		dev_info(&priv_data->spidev->dev, "register_pm_notifier_error\n");
+	}
+
 	while ((query_err != 0) && (retry < QTI_CAN_FW_QUERY_RETRY_COUNT)) {
 		LOGDI("Trying to query fw version %d", retry);
 		query_err = qti_can_query_firmware_version(priv_data);
@@ -1594,8 +1944,7 @@ static int qti_can_remove(struct spi_device *spi)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-static int qti_can_suspend(struct device *dev)
+static int qti_can_prepare(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct qti_can *priv_data = NULL;
@@ -1641,20 +1990,11 @@ static int qti_can_resume(struct device *dev)
 	return ret;
 }
 
-static const struct dev_pm_ops qti_can_dev_pm_ops = {
-	.suspend	= qti_can_suspend,
-	.resume		= qti_can_resume,
-};
-#endif
-
 static struct spi_driver qti_can_driver = {
 	.driver = {
 		.name = "qti-can",
 		.of_match_table = qti_can_match_table,
 		.owner = THIS_MODULE,
-#ifdef CONFIG_PM
-		.pm = &qti_can_dev_pm_ops,
-#endif
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = qti_can_probe,

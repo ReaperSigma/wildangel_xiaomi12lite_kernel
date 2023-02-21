@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"flashv2: %s: " fmt, __func__
@@ -1551,6 +1552,7 @@ static int qpnp_flash_led_symmetry_config(struct flash_switch_data *snode)
 	return 0;
 }
 
+#define  FLASH_VREG_OK_SETTLE_TIME_US 1000
 static int qpnp_flash_led_module_enable(struct flash_switch_data *snode)
 {
 	struct qpnp_flash_led *led = dev_get_drvdata(&snode->pdev->dev);
@@ -1563,6 +1565,11 @@ static int qpnp_flash_led_module_enable(struct flash_switch_data *snode)
 		if (rc < 0)
 			return rc;
 	}
+
+	/* For PMI632, wait 1ms to allow flash to settle */
+	if (led->pmic_type == PMI632)
+		udelay(FLASH_VREG_OK_SETTLE_TIME_US);
+
 	led->enable++;
 
 	return rc;
@@ -2946,6 +2953,25 @@ static int qpnp_flash_led_register_interrupts(struct qpnp_flash_led *led)
 	return 0;
 }
 
+static void qpnp_flash_led_free_interrupts(struct qpnp_flash_led *led)
+{
+	/* free irqs */
+	if (led->pdata->all_ramp_up_done_irq >= 0)
+		devm_free_irq(&led->pdev->dev,
+			led->pdata->all_ramp_up_done_irq,
+			led);
+
+	if (led->pdata->all_ramp_down_done_irq >= 0)
+		devm_free_irq(&led->pdev->dev,
+			led->pdata->all_ramp_down_done_irq,
+			led);
+
+	if (led->pdata->led_fault_irq >= 0)
+		devm_free_irq(&led->pdev->dev,
+			led->pdata->led_fault_irq,
+			led);
+}
+
 static int qpnp_flash_led_probe(struct platform_device *pdev)
 {
 	struct qpnp_flash_led *led;
@@ -2970,7 +2996,7 @@ static int qpnp_flash_led_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	led->pmic_type = (u8)of_device_get_match_data(&pdev->dev);
+	led->pmic_type = (enum pmic_type)(uintptr_t)of_device_get_match_data(&pdev->dev);
 
 	if (led->pmic_type == PM6150L)
 		led->wa_flags |= PM6150L_IRES_WA;
@@ -3137,6 +3163,38 @@ static int qpnp_flash_led_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static int qpnp_flash_led_freeze(struct device *dev)
+{
+	struct qpnp_flash_led *led = dev_get_drvdata(dev);
+
+	qpnp_flash_led_free_interrupts(led);
+
+	return 0;
+}
+
+static int qpnp_flash_led_restore(struct device *dev)
+{
+	struct qpnp_flash_led *led = dev_get_drvdata(dev);
+	int rc = 0;
+
+	rc = qpnp_flash_led_init_settings(led);
+	if (rc < 0) {
+		pr_err("Flash setting re-init failed in Restore rc= %d\n", rc);
+		return rc;
+	}
+
+	rc = qpnp_flash_led_register_interrupts(led);
+	if (rc < 0)
+		pr_err("Interrupt re-registration failed in Restore rc= %d\n", rc);
+
+	return rc;
+}
+
+static const struct dev_pm_ops qpnp_flash_led_pm_ops = {
+	.freeze = qpnp_flash_led_freeze,
+	.restore = qpnp_flash_led_restore,
+};
+
 const struct of_device_id qpnp_flash_led_match_table[] = {
 	{ .compatible = "qcom,pm6150l-flash-led-v2", .data = (void *)PM6150L},
 	{ .compatible = "qcom,pmi632-flash-led-v2", .data = (void *)PMI632},
@@ -3147,6 +3205,7 @@ static struct platform_driver qpnp_flash_led_driver = {
 	.driver		= {
 		.name = "qcom,qpnp-flash-led-v2",
 		.of_match_table = qpnp_flash_led_match_table,
+		.pm = &qpnp_flash_led_pm_ops,
 	},
 	.probe		= qpnp_flash_led_probe,
 	.remove		= qpnp_flash_led_remove,
