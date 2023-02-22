@@ -560,10 +560,10 @@ retry:
 	 * nat_tree_lock. Therefore, we should retry, if we failed to grab here
 	 * while not bothering checkpoint.
 	 */
-	if (!rwsem_is_locked(&sbi->cp_global_sem)) {
+	if (!f2fs_rwsem_is_locked(&sbi->cp_global_sem)) {
 		down_read(&curseg->journal_rwsem);
 	} else if (!down_read_trylock(&curseg->journal_rwsem)) {
-		up_read(&nm_i->nat_tree_lock);
+		f2fs_up_read(&nm_i->nat_tree_lock);
 		goto retry;
 	}
 
