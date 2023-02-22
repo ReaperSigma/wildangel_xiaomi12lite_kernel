@@ -3917,7 +3917,6 @@ bail:
 		locked = 0;
 	}
 	spin_lock(&fl->hlock);
-	fl->in_process_create = false;
 	spin_unlock(&fl->hlock);
 	return err;
 }
