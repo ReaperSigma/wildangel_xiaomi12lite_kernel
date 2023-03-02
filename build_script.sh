@@ -23,6 +23,7 @@ if [[ $USER == "$USER_OVERRIDE" ]]; then
 	ENABLE_CCACHE="1"
 fi
 
+export TARGET_PRODUCT=taoyao
 #############################
 TOOLCHAIN="3"               #
 # 1) gcc-4.9                #
