@@ -603,21 +603,7 @@ struct bfq_group *bfq_find_set_group(struct bfq_data *bfqd,
 		}
 	}
 
-	while (blkg) {
-		if (!blkg->online) {
-			blkg = blkg->parent;
-			continue;
-		}
-		bfqg = blkg_to_bfqg(blkg);
-		if (bfqg->online) {
-			bio_associate_blkg_from_css(bio, &blkg->blkcg->css);
-			return bfqg;
-		}
-		blkg = blkg->parent;
-	}
-	bio_associate_blkg_from_css(bio,
-				&bfqg_to_blkg(bfqd->root_group)->blkcg->css);
-	return bfqd->root_group;
+	return bfqg;
 }
 
 /**

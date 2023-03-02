@@ -396,14 +396,13 @@ int tpm_pm_suspend(struct device *dev)
 	if (chip->flags & TPM_CHIP_FLAG_ALWAYS_POWERED)
 		return 0;
 
-	rc = tpm_try_get_ops(chip);
-	if (!rc) {
+	if (!tpm_chip_start(chip)) {
 		if (chip->flags & TPM_CHIP_FLAG_TPM2)
 			tpm2_shutdown(chip, TPM2_SU_STATE);
 		else
 			rc = tpm1_pm_suspend(chip, tpm_suspend_pcr);
 
-		tpm_put_ops(chip);
+		tpm_chip_stop(chip);
 	}
 
 	return rc;

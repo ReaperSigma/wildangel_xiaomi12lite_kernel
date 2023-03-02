@@ -492,7 +492,7 @@ static int mousevsc_probe(struct hv_device *device,
 
 	ret = hid_add_device(hid_dev);
 	if (ret)
-		goto probe_err2;
+		goto probe_err1;
 
 
 	ret = hid_parse(hid_dev);

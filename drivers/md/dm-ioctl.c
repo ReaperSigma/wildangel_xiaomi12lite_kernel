@@ -572,7 +572,7 @@ static void list_version_get_needed(struct target_type *tt, void *needed_param)
     size_t *needed = needed_param;
 
     *needed += sizeof(struct dm_target_versions);
-    *needed += strlen(tt->name) + 1;
+    *needed += strlen(tt->name);
     *needed += ALIGN_MASK;
 }
 
@@ -637,7 +637,7 @@ static int __list_versions(struct dm_ioctl *param, size_t param_size, const char
 	iter_info.old_vers = NULL;
 	iter_info.vers = vers;
 	iter_info.flags = 0;
-	iter_info.end = (char *)vers + needed;
+	iter_info.end = (char *)vers+len;
 
 	/*
 	 * Now loop through filling out the names & versions.

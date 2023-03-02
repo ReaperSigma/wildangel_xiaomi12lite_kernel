@@ -484,14 +484,7 @@ static int __init ntb_netdev_init_module(void)
 	rc = ntb_transport_register_client_dev(KBUILD_MODNAME);
 	if (rc)
 		return rc;
-
-	rc = ntb_transport_register_client(&ntb_netdev_client);
-	if (rc) {
-		ntb_transport_unregister_client_dev(KBUILD_MODNAME);
-		return rc;
-	}
-
-	return 0;
+	return ntb_transport_register_client(&ntb_netdev_client);
 }
 module_init(ntb_netdev_init_module);
 

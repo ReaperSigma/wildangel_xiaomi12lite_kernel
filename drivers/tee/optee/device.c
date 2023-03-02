@@ -81,7 +81,7 @@ static int optee_register_device(const uuid_t *device_uuid, u32 device_id)
 	rc = device_register(&optee_device->dev);
 	if (rc) {
 		pr_err("device registration failed, err: %d\n", rc);
-		put_device(&optee_device->dev);
+		kfree(optee_device);
 	}
 
 	return rc;

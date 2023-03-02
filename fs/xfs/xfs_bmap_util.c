@@ -1721,7 +1721,6 @@ xfs_swap_extents(
 	int			lock_flags;
 	uint64_t		f;
 	int			resblks = 0;
-	unsigned int		flags = 0;
 
 	/*
 	 * Lock the inodes against other IO, page faults and truncate to
@@ -1777,16 +1776,17 @@ xfs_swap_extents(
 		resblks +=  XFS_SWAP_RMAP_SPACE_RES(mp, tipnext, w);
 
 		/*
-		 * If either inode straddles a bmapbt block allocation boundary,
-		 * the rmapbt algorithm triggers repeated allocs and frees as
-		 * extents are remapped. This can exhaust the block reservation
-		 * prematurely and cause shutdown. Return freed blocks to the
-		 * transaction reservation to counter this behavior.
+		 * Handle the corner case where either inode might straddle the
+		 * btree format boundary. If so, the inode could bounce between
+		 * btree <-> extent format on unmap -> remap cycles, freeing and
+		 * allocating a bmapbt block each time.
 		 */
-		flags |= XFS_TRANS_RES_FDBLKS;
+		if (ipnext == (XFS_IFORK_MAXEXT(ip, w) + 1))
+			resblks += XFS_IFORK_MAXEXT(ip, w);
+		if (tipnext == (XFS_IFORK_MAXEXT(tip, w) + 1))
+			resblks += XFS_IFORK_MAXEXT(tip, w);
 	}
-	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, resblks, 0, flags,
-				&tp);
+	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, resblks, 0, 0, &tp);
 	if (error)
 		goto out_unlock;
 

@@ -180,10 +180,7 @@ static int gfs2_check_sb(struct gfs2_sbd *sdp, int silent)
 		pr_warn("Invalid superblock size\n");
 		return -EINVAL;
 	}
-	if (sb->sb_bsize_shift != ffs(sb->sb_bsize) - 1) {
-		pr_warn("Invalid block size shift\n");
-		return -EINVAL;
-	}
+
 	return 0;
 }
 
@@ -380,10 +377,8 @@ static int init_names(struct gfs2_sbd *sdp, int silent)
 	if (!table[0])
 		table = sdp->sd_vfs->s_id;
 
-	BUILD_BUG_ON(GFS2_LOCKNAME_LEN > GFS2_FSNAME_LEN);
-
-	strscpy(sdp->sd_proto_name, proto, GFS2_LOCKNAME_LEN);
-	strscpy(sdp->sd_table_name, table, GFS2_LOCKNAME_LEN);
+	strlcpy(sdp->sd_proto_name, proto, GFS2_FSNAME_LEN);
+	strlcpy(sdp->sd_table_name, table, GFS2_FSNAME_LEN);
 
 	table = sdp->sd_table_name;
 	while ((table = strchr(table, '/')))
@@ -1354,13 +1349,13 @@ static int gfs2_parse_param(struct fs_context *fc, struct fs_parameter *param)
 
 	switch (o) {
 	case Opt_lockproto:
-		strscpy(args->ar_lockproto, param->string, GFS2_LOCKNAME_LEN);
+		strlcpy(args->ar_lockproto, param->string, GFS2_LOCKNAME_LEN);
 		break;
 	case Opt_locktable:
-		strscpy(args->ar_locktable, param->string, GFS2_LOCKNAME_LEN);
+		strlcpy(args->ar_locktable, param->string, GFS2_LOCKNAME_LEN);
 		break;
 	case Opt_hostdata:
-		strscpy(args->ar_hostdata, param->string, GFS2_LOCKNAME_LEN);
+		strlcpy(args->ar_hostdata, param->string, GFS2_LOCKNAME_LEN);
 		break;
 	case Opt_spectator:
 		args->ar_spectator = 1;

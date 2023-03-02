@@ -394,10 +394,16 @@ xfsaild_push(
 	target = ailp->ail_target;
 	ailp->ail_target_prev = target;
 
-	/* we're done if the AIL is empty or our push has reached the end */
 	lip = xfs_trans_ail_cursor_first(ailp, &cur, ailp->ail_last_pushed_lsn);
-	if (!lip)
+	if (!lip) {
+		/*
+		 * If the AIL is empty or our push has reached the end we are
+		 * done now.
+		 */
+		xfs_trans_ail_cursor_done(&cur);
+		spin_unlock(&ailp->ail_lock);
 		goto out_done;
+	}
 
 	XFS_STATS_INC(mp, xs_push_ail);
 
@@ -479,8 +485,6 @@ xfsaild_push(
 			break;
 		lsn = lip->li_lsn;
 	}
-
-out_done:
 	xfs_trans_ail_cursor_done(&cur);
 	spin_unlock(&ailp->ail_lock);
 
@@ -488,6 +492,7 @@ out_done:
 		ailp->ail_log_flush++;
 
 	if (!count || XFS_LSN_CMP(lsn, target) >= 0) {
+out_done:
 		/*
 		 * We reached the target or the AIL is empty, so wait a bit
 		 * longer for I/O to complete and remove pushed items from the
@@ -579,8 +584,7 @@ xfsaild(
 		 */
 		smp_rmb();
 		if (!xfs_ail_min(ailp) &&
-		    ailp->ail_target == ailp->ail_target_prev &&
-		    list_empty(&ailp->ail_buf_list)) {
+		    ailp->ail_target == ailp->ail_target_prev) {
 			spin_unlock(&ailp->ail_lock);
 			freezable_schedule();
 			tout = 0;

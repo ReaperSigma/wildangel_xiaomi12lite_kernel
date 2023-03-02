@@ -1060,8 +1060,6 @@ static void regdb_fw_cb(const struct firmware *fw, void *context)
 
 static int query_regdb_file(const char *alpha2)
 {
-	int err;
-
 	ASSERT_RTNL();
 
 	if (regdb)
@@ -1071,13 +1069,9 @@ static int query_regdb_file(const char *alpha2)
 	if (!alpha2)
 		return -ENOMEM;
 
-	err = request_firmware_nowait(THIS_MODULE, true, "regulatory.db",
-				      &reg_pdev->dev, GFP_KERNEL,
-				      (void *)alpha2, regdb_fw_cb);
-	if (err)
-		kfree(alpha2);
-
-	return err;
+	return request_firmware_nowait(THIS_MODULE, true, "regulatory.db",
+				       &reg_pdev->dev, GFP_KERNEL,
+				       (void *)alpha2, regdb_fw_cb);
 }
 
 int reg_reload_regdb(void)

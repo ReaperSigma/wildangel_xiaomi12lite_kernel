@@ -67,10 +67,9 @@ static bool xenvif_rx_ring_slots_available(struct xenvif_queue *queue)
 	return false;
 }
 
-bool xenvif_rx_queue_tail(struct xenvif_queue *queue, struct sk_buff *skb)
+void xenvif_rx_queue_tail(struct xenvif_queue *queue, struct sk_buff *skb)
 {
 	unsigned long flags;
-	bool ret = true;
 
 	spin_lock_irqsave(&queue->rx_queue.lock, flags);
 
@@ -81,19 +80,9 @@ bool xenvif_rx_queue_tail(struct xenvif_queue *queue, struct sk_buff *skb)
 		struct net_device *dev = queue->vif->dev;
 
 		netif_tx_stop_queue(netdev_get_tx_queue(dev, queue->id));
-		ret = false;
-	} else {
-		if (skb_queue_empty(&queue->rx_queue))
-			xenvif_update_needed_slots(queue, skb);
-
-		__skb_queue_tail(&queue->rx_queue, skb);
-
-		queue->rx_queue_len += skb->len;
 	}
 
 	spin_unlock_irqrestore(&queue->rx_queue.lock, flags);
-
-	return ret;
 }
 
 static struct sk_buff *xenvif_rx_dequeue(struct xenvif_queue *queue)
@@ -460,7 +449,7 @@ static void xenvif_rx_skb(struct xenvif_queue *queue)
 
 #define RX_BATCH_SIZE 64
 
-static void xenvif_rx_action(struct xenvif_queue *queue)
+void xenvif_rx_action(struct xenvif_queue *queue)
 {
 	struct sk_buff_head completed_skbs;
 	unsigned int work_done = 0;

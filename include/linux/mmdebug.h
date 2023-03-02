@@ -37,18 +37,6 @@ void dump_mm(const struct mm_struct *mm);
 			BUG();						\
 		}							\
 	} while (0)
-#define VM_WARN_ON_ONCE_PAGE(cond, page)	({			\
-	static bool __section(.data.once) __warned;			\
-	int __ret_warn_once = !!(cond);					\
-									\
-	if (unlikely(__ret_warn_once && !__warned)) {			\
-		dump_page(page, "VM_WARN_ON_ONCE_PAGE(" __stringify(cond)")");\
-		__warned = true;					\
-		WARN_ON(1);						\
-	}								\
-	unlikely(__ret_warn_once);					\
-})
-
 #define VM_WARN_ON(cond) (void)WARN_ON(cond)
 #define VM_WARN_ON_ONCE(cond) (void)WARN_ON_ONCE(cond)
 #define VM_WARN_ONCE(cond, format...) (void)WARN_ONCE(cond, format)

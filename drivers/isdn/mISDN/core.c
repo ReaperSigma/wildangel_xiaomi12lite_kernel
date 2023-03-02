@@ -222,7 +222,7 @@ mISDN_register_device(struct mISDNdevice *dev,
 
 	err = get_free_devid();
 	if (err < 0)
-		return err;
+		goto error1;
 	dev->id = err;
 
 	device_initialize(&dev->dev);

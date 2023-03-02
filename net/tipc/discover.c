@@ -208,10 +208,7 @@ void tipc_disc_rcv(struct net *net, struct sk_buff *skb,
 	u32 self;
 	int err;
 
-	if (skb_linearize(skb)) {
-		kfree_skb(skb);
-		return;
-	}
+	skb_linearize(skb);
 	hdr = buf_msg(skb);
 
 	if (caps & TIPC_NODE_ID128)

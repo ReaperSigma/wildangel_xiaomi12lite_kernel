@@ -2730,7 +2730,14 @@ int btrfs_qgroup_inherit(struct btrfs_trans_handle *trans, u64 srcid,
 		dstgroup->rsv_rfer = inherit->lim.rsv_rfer;
 		dstgroup->rsv_excl = inherit->lim.rsv_excl;
 
-		qgroup_dirty(fs_info, dstgroup);
+		ret = update_qgroup_limit_item(trans, dstgroup);
+		if (ret) {
+			fs_info->qgroup_flags |= BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT;
+			btrfs_info(fs_info,
+				   "unable to update quota limit for %llu",
+				   dstgroup->qgroupid);
+			goto unlock;
+		}
 	}
 
 	if (srcid) {
@@ -3137,13 +3144,6 @@ out:
 	return ret;
 }
 
-static bool rescan_should_stop(struct btrfs_fs_info *fs_info)
-{
-	return btrfs_fs_closing(fs_info) ||
-		test_bit(BTRFS_FS_STATE_REMOUNTING, &fs_info->fs_state) ||
-		!test_bit(BTRFS_FS_QUOTA_ENABLED, &fs_info->flags);
-}
-
 static void btrfs_qgroup_rescan_worker(struct btrfs_work *work)
 {
 	struct btrfs_fs_info *fs_info = container_of(work, struct btrfs_fs_info,
@@ -3170,9 +3170,11 @@ static void btrfs_qgroup_rescan_worker(struct btrfs_work *work)
 			err = PTR_ERR(trans);
 			break;
 		}
-
-		err = qgroup_rescan_leaf(trans, path);
-
+		if (!test_bit(BTRFS_FS_QUOTA_ENABLED, &fs_info->flags)) {
+			err = -EINTR;
+		} else {
+			err = qgroup_rescan_leaf(trans, path);
+		}
 		if (err > 0)
 			btrfs_commit_transaction(trans);
 		else
@@ -3186,7 +3188,7 @@ out:
 	if (err > 0 &&
 	    fs_info->qgroup_flags & BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT) {
 		fs_info->qgroup_flags &= ~BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT;
-	} else if (err < 0 || stopped) {
+	} else if (err < 0) {
 		fs_info->qgroup_flags |= BTRFS_QGROUP_STATUS_FLAG_INCONSISTENT;
 	}
 	mutex_unlock(&fs_info->qgroup_rescan_lock);

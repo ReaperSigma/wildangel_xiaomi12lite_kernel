@@ -124,7 +124,7 @@ static int bnxt_set_coalesce(struct net_device *dev,
 	}
 
 reset_coalesce:
-	if (test_bit(BNXT_STATE_OPEN, &bp->state)) {
+	if (netif_running(dev)) {
 		if (update_stats) {
 			rc = bnxt_close_nic(bp, true, false);
 			if (!rc)
