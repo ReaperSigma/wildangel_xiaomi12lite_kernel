@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1916,11 +1917,6 @@ void hdd_wmm_classify_pkt(struct hdd_adapter *adapter,
 	 */
 	hdd_check_and_upgrade_udp_qos(adapter, skb, user_pri);
 
-	if (!tos && skb->priority && skb->priority < HDD_WMM_UP_TO_AC_MAP_SIZE) {
-		// cgroup net_prio. see net/core/netprio_cgroup.c.
-		*user_pri = skb->priority;
-	}
-
 #ifdef HDD_WMM_DEBUG
 	hdd_debug("tos is %d, dscp is %d, up is %d", tos, dscp, *user_pri);
 #endif /* HDD_WMM_DEBUG */
@@ -2839,6 +2835,11 @@ static int __wlan_hdd_cfg80211_config_tspec(struct wiphy *wiphy,
 	int ret;
 
 	hdd_enter_dev(wdev->netdev);
+
+	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
+		hdd_err("Command not allowed in FTM mode");
+		return -EPERM;
+	}
 
 	ret = wlan_hdd_validate_context(hdd_ctx);
 	if (ret != 0)

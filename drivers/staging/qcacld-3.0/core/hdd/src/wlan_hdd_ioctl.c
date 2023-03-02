@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -80,11 +81,20 @@
 #define WLAN_PRIV_DATA_MAX_LEN    8192
 
 /*
- * Driver miracast parameters 0-Disabled
+ * Driver miracast parameters:
+ * 0-Disabled
  * 1-Source, 2-Sink
+ * 128: miracast connecting time optimization enabled. At present host
+ * will disable imps to reduce connection time for p2p.
+ * 129: miracast connecting time optimization disabled
  */
-#define WLAN_HDD_DRIVER_MIRACAST_CFG_MIN_VAL 0
-#define WLAN_HDD_DRIVER_MIRACAST_CFG_MAX_VAL 2
+enum miracast_param {
+	MIRACAST_DISABLED,
+	MIRACAST_SOURCE,
+	MIRACAST_SINK,
+	MIRACAST_CONN_OPT_ENABLED = 128,
+	MIRACAST_CONN_OPT_DISABLED = 129,
+};
 
 /*
  * When ever we need to print IBSSPEERINFOALL for more than 16 STA
@@ -2964,32 +2974,6 @@ static int drv_cmd_get_country(struct hdd_adapter *adapter,
 	return ret;
 }
 
-/**
- * set APF working status per WLAN chip's suspend monitor mode
-
- * @adapter: pointer to adapter on which request is received
- * Return: On success 0, negative value on error.
- */
-
-static int drv_apf_enable(struct hdd_adapter *adapter, bool apf_enable)
-{
-	QDF_STATUS status;
-
-	hdd_prevent_suspend(WIFI_POWER_EVENT_WAKELOCK_WOW);
-
-	status = sme_set_apf_enable_disable(hdd_adapter_get_mac_handle(adapter),
-					    adapter->vdev_id, apf_enable);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		hdd_err("Unable to post sme apf enable/disable message (status-%d)",
-				status);
-		return -EINVAL;
-	}
-	adapter->apf_context.apf_enabled = apf_enable;
-
-	hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_WOW);
-	return 0;
-}
-
 static int drv_cmd_set_roam_trigger(struct hdd_adapter *adapter,
 				    struct hdd_context *hdd_ctx,
 				    uint8_t *command,
@@ -3358,11 +3342,7 @@ static int drv_cmd_set_suspend_mode(struct hdd_adapter *adapter,
 		return -EINVAL;
 	}
 
-	//MIUI: ADD
-	//idle_monitor: 0-screen on/monitor off/APF disable, 1: screen off/monitor on/APF enable.
-	drv_apf_enable(adapter, idle_monitor);
-
-	hdd_debug("APF status and idle_monitor:%d, ", idle_monitor);
+	hdd_debug("idle_monitor:%d", idle_monitor);
 	status = ucfg_pmo_tgt_psoc_send_idle_roam_suspend_mode(hdd_ctx->psoc,
 							       idle_monitor);
 	if (QDF_IS_STATUS_ERROR(status)) {
@@ -4896,12 +4876,34 @@ static int drv_cmd_miracast(struct hdd_adapter *adapter,
 		ret = -EINVAL;
 		goto exit;
 	}
-	if ((filter_type < WLAN_HDD_DRIVER_MIRACAST_CFG_MIN_VAL) ||
-	    (filter_type > WLAN_HDD_DRIVER_MIRACAST_CFG_MAX_VAL)) {
-		hdd_err("Accepted Values are 0 to 2. 0-Disabled, 1-Source, 2-Sink");
+	hdd_debug("filter_type %d", filter_type);
+
+	switch (filter_type) {
+	case MIRACAST_DISABLED:
+	case MIRACAST_SOURCE:
+	case MIRACAST_SINK:
+		break;
+	case MIRACAST_CONN_OPT_ENABLED:
+	case MIRACAST_CONN_OPT_DISABLED:
+		{
+			bool is_imps_enabled = true;
+
+			ucfg_mlme_is_imps_enabled(hdd_ctx->psoc,
+						  &is_imps_enabled);
+			if (!is_imps_enabled)
+				return 0;
+			hdd_set_idle_ps_config(
+				hdd_ctx,
+				filter_type ==
+				MIRACAST_CONN_OPT_ENABLED ? false : true);
+			return 0;
+		}
+	default:
+		hdd_err("accepted Values: 0-Disabled, 1-Source, 2-Sink, 128,129");
 		ret = -EINVAL;
 		goto exit;
 	}
+
 	/* Filtertype value should be either 0-Disabled, 1-Source, 2-sink */
 	hdd_ctx->miracast_value = filter_type;
 
@@ -6334,8 +6336,8 @@ static int drv_cmd_invalid(struct hdd_adapter *adapter,
 		   TRACE_CODE_HDD_UNSUPPORTED_IOCTL,
 		   adapter->vdev_id, 0);
 
-	hdd_warn("%s: Unsupported driver command \"%s\"",
-		 adapter->dev->name, command);
+	hdd_debug("%s: Unsupported driver command \"%s\"",
+		  adapter->dev->name, command);
 
 	return -ENOTSUPP;
 }
@@ -6943,37 +6945,6 @@ static int drv_cmd_get_disable_chan_list(struct hdd_adapter *adapter,
 }
 #endif
 
-
-static int drv_cmd_set_phymode(struct hdd_adapter *adapter,
-					struct hdd_context *hdd_ctx,
-					uint8_t *command,
-					uint8_t command_len,
-					struct hdd_priv_data *priv_data)
-{
-	int ret = 0;
-	uint8_t *value = command;
-	uint8_t new_phymode = 0;
-
-	/* Move pointer to ahead of SET_PHYMODE<delimiter> */
-	value = value + command_len + 1;
-
-	/* Convert the value from ascii to integer */
-	ret = kstrtou8(value, 10, &new_phymode);
-	if (ret < 0) {
-		/*
-		 * If the input value is greater than max value of datatype,
-		 * then also kstrtou8 fails
-		 */
-		hdd_err("kstrtou8 failed Input value may be out of range");
-		ret = -EINVAL;
-		goto exit;
-	}
-
-	hdd_we_update_phymode(adapter, new_phymode);
-exit:
-	return ret;
-}
-
 #ifdef FEATURE_ANI_LEVEL_REQUEST
 static int drv_cmd_get_ani_level(struct hdd_adapter *adapter,
 				 struct hdd_context *hdd_ctx,
@@ -7319,7 +7290,6 @@ static const struct hdd_drv_cmd hdd_drv_cmds[] = {
 	{"GET_FUNCTION_CALL_MAP",     drv_cmd_get_function_call_map, true},
 #endif
 	{"STOP",                      drv_cmd_dummy, false},
-	{"SET_PHYMODE",               drv_cmd_set_phymode, true},
 	/* Deprecated commands */
 	{"RXFILTER-START",            drv_cmd_dummy, false},
 	{"RXFILTER-STOP",             drv_cmd_dummy, false},

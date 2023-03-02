@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -824,6 +825,7 @@ static int wma_fill_roam_synch_buffer(tp_wma_handle wma,
 				WMI_ROAM_SYNCH_EVENTID_param_tlvs *param_buf)
 {
 	wmi_roam_synch_event_fixed_param *synch_event;
+	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	wmi_channel *chan;
 	wmi_key_material *key;
 	wmi_key_material_ext *key_ft;
@@ -855,6 +857,9 @@ static int wma_fill_roam_synch_buffer(tp_wma_handle wma,
 		return status;
 	}
 
+	cdp_update_roaming_peer_in_vdev(soc, synch_event->vdev_id,
+					roam_synch_ind_ptr->bssid.bytes,
+					synch_event->auth_status);
 	/*
 	 * If lengths of bcn_probe_rsp, reassoc_req and reassoc_rsp are zero in
 	 * synch_event driver would have received bcn_probe_rsp, reassoc_req
@@ -1386,14 +1391,21 @@ int wma_mlme_roam_synch_event_handler_cb(void *handle, uint8_t *event,
 	if (QDF_IS_STATUS_ERROR(wma->pe_roam_synch_cb(wma->mac_context,
 			roam_synch_ind_ptr, bss_desc_ptr,
 			SIR_ROAM_SYNCH_PROPAGATION))) {
-		wma_err("LFR3: PE roam synch cb failed");
+		wma_err("LFR3: PE roam synch propagation failed");
 		status = -EBUSY;
 		goto cleanup_label;
 	}
 
 	wma_roam_update_vdev(wma, roam_synch_ind_ptr);
-	wma->csr_roam_synch_cb(wma->mac_context, roam_synch_ind_ptr,
-			       bss_desc_ptr, SIR_ROAM_SYNCH_PROPAGATION);
+
+	if (QDF_IS_STATUS_ERROR(wma->csr_roam_synch_cb(wma->mac_context,
+				roam_synch_ind_ptr,
+				bss_desc_ptr, SIR_ROAM_SYNCH_PROPAGATION))) {
+		wma_err("CSR roam synch propagation failed, abort roam");
+		status = -EINVAL;
+		goto cleanup_label;
+	}
+
 	wma_process_roam_synch_complete(wma, synch_event->vdev_id);
 
 	/* update freq and channel width */
@@ -2184,6 +2196,77 @@ wma_rso_print_11kv_info(struct wmi_neighbor_report_data *neigh_rpt,
 	qdf_mem_free(buf);
 }
 
+void wma_report_real_time_roam_stats(struct wlan_objmgr_psoc *psoc,
+				     uint8_t vdev_id,
+				     enum roam_rt_stats_type events,
+				     struct mlme_roam_debug_info *roam_info,
+				     uint32_t value, uint32_t reason)
+{
+	struct mac_context *mac = cds_get_context(QDF_MODULE_ID_PE);
+	struct mlme_roam_debug_info *roam_event = NULL;
+
+	if (!wlan_cm_get_roam_rt_stats(psoc, ROAM_RT_STATS_ENABLE)) {
+		wma_debug("Roam events stats is disabled");
+		return;
+	}
+
+	switch (events) {
+	case ROAM_RT_STATS_TYPE_SCAN_STATE:
+		roam_event = qdf_mem_malloc(sizeof(*roam_event));
+		if (!roam_event)
+			return;
+
+		if (value == WMI_ROAM_NOTIF_SCAN_START) {
+			roam_event->roam_event_param.roam_scan_state =
+					QCA_WLAN_VENDOR_ROAM_SCAN_STATE_START;
+			if (reason) {
+				roam_event->trigger.present = true;
+				roam_event->trigger.trigger_reason = reason;
+			}
+		} else if (value == WMI_ROAM_NOTIF_SCAN_END) {
+			roam_event->roam_event_param.roam_scan_state =
+					QCA_WLAN_VENDOR_ROAM_SCAN_STATE_END;
+		}
+
+		if (mac && mac->sme.roam_rt_stats_cb) {
+			wma_debug("Invoke HDD roam events callback for "
+				  "roam scan notif");
+			roam_event->roam_event_param.vdev_id = vdev_id;
+			mac->sme.roam_rt_stats_cb(mac->hdd_handle, roam_event);
+		}
+		qdf_mem_free(roam_event);
+		break;
+	case ROAM_RT_STATS_TYPE_INVOKE_FAIL_REASON:
+		roam_event = qdf_mem_malloc(sizeof(*roam_event));
+		if (!roam_event)
+			return;
+
+		roam_event->roam_event_param.roam_invoke_fail_reason = value;
+
+		if (mac && mac->sme.roam_rt_stats_cb) {
+			wma_debug("Invoke HDD roam events callback for "
+				  "roam invoke fail");
+			roam_event->roam_event_param.vdev_id = vdev_id;
+			mac->sme.roam_rt_stats_cb(mac->hdd_handle, roam_event);
+		}
+		qdf_mem_free(roam_event);
+		break;
+	case ROAM_RT_STATS_TYPE_ROAM_SCAN_INFO:
+		if ((roam_info->scan.present || roam_info->trigger.present ||
+		     (roam_info->result.present &&
+		      roam_info->result.fail_reason)) &&
+		    mac && mac->sme.roam_rt_stats_cb) {
+			wma_debug("Invoke HDD roam events callback for roam "
+				  "stats event");
+			roam_info->roam_event_param.vdev_id = vdev_id;
+			mac->sme.roam_rt_stats_cb(mac->hdd_handle, roam_info);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 int wma_roam_stats_event_handler(WMA_HANDLE handle, uint8_t *event,
 				 uint32_t len)
 {
@@ -2425,6 +2508,11 @@ int wma_roam_stats_event_handler(WMA_HANDLE handle, uint8_t *event,
 		if (roam_info->data_11kv.present)
 			wma_rso_print_11kv_info(&roam_info->data_11kv, vdev_id);
 		}
+
+		wma_report_real_time_roam_stats(
+					wma->psoc, vdev_id,
+					ROAM_RT_STATS_TYPE_ROAM_SCAN_INFO,
+					roam_info, 0, 0);
 
 		qdf_mem_free(roam_info);
 	}
@@ -4576,6 +4664,14 @@ int wma_roam_event_callback(WMA_HANDLE handle, uint8_t *event_buf,
 	case WMI_ROAM_REASON_INVALID:
 		wma_invalid_roam_reason_handler(wma_handle, wmi_event->vdev_id,
 						wmi_event->notif);
+		if (wmi_event->notif == WMI_ROAM_NOTIF_SCAN_START ||
+		    wmi_event->notif == WMI_ROAM_NOTIF_SCAN_END)
+			wma_report_real_time_roam_stats(
+						wma_handle->psoc,
+						wmi_event->vdev_id,
+						ROAM_RT_STATS_TYPE_SCAN_STATE,
+						NULL, wmi_event->notif,
+						wmi_event->notif_params);
 		break;
 	case WMI_ROAM_REASON_RSO_STATUS:
 		wma_rso_cmd_status_event_handler(wmi_event);
@@ -4595,7 +4691,10 @@ int wma_roam_event_callback(WMA_HANDLE handle, uint8_t *event_buf,
 		wlan_cm_update_roam_states(wma_handle->psoc, wmi_event->vdev_id,
 					   wmi_event->notif_params,
 					   ROAM_INVOKE_FAIL_REASON);
-
+		wma_report_real_time_roam_stats(
+					wma_handle->psoc, wmi_event->vdev_id,
+					ROAM_RT_STATS_TYPE_INVOKE_FAIL_REASON,
+					NULL, wmi_event->notif_params, 0);
 		qdf_mem_free(roam_synch_data);
 		break;
 	case WMI_ROAM_REASON_DEAUTH:

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1503,7 +1504,7 @@ QDF_STATUS sap_signal_hdd_event(struct sap_context *sap_ctx,
 		bss_complete->status = (eSapStatus) context;
 		bss_complete->staId = sap_ctx->sap_sta_id;
 
-		sap_info("(eSAP_START_BSS_EVENT): staId = %d",
+		sap_debug("(eSAP_START_BSS_EVENT): staId = %d",
 			  bss_complete->staId);
 
 		bss_complete->operating_chan_freq = sap_ctx->chan_freq;
@@ -2444,7 +2445,7 @@ static QDF_STATUS sap_fsm_handle_radar_during_cac(struct sap_context *sap_ctx,
 }
 
 /**
- * sap_fsm_handle_start_failure() - handle start failure or stop during cac wait
+ * sap_fsm_handle_start_failure() - handle sap start failure
  * @sap_ctx: SAP context
  * @msg: event msg
  * @mac_handle: Opaque handle to the global MAC context
@@ -2457,13 +2458,11 @@ static QDF_STATUS sap_fsm_handle_start_failure(struct sap_context *sap_ctx,
 {
 	QDF_STATUS qdf_status = QDF_STATUS_E_FAILURE;
 
-	if (msg == eSAP_HDD_STOP_INFRA_BSS &&
-	    (QDF_IS_STATUS_SUCCESS(wlan_vdev_is_dfs_cac_wait(sap_ctx->vdev)) ||
-	     QDF_IS_STATUS_SUCCESS(
-	     wlan_vdev_is_restart_progress(sap_ctx->vdev)))) {
+	if (msg == eSAP_HDD_STOP_INFRA_BSS) {
 		/* Transition from SAP_STARTING to SAP_STOPPING */
-		sap_debug("In cac wait state from state %s => %s",
+		sap_debug("SAP start is in progress, state from state %s => %s",
 			  "SAP_STARTING", "SAP_STOPPING");
+
 		/*
 		 * Stop the CAC timer only in following conditions
 		 * single AP: if there is a single AP then stop timer
@@ -3405,10 +3404,6 @@ static QDF_STATUS sap_get_freq_list(struct sap_context *sap_ctx,
 	uint8_t i;
 	bool srd_chan_enabled;
 	enum QDF_OPMODE vdev_opmode;
-	bool is_sap_only_allow_sta_dfs_indoor_chan = true;
-	uint32_t work_freq = 0;
-	uint32_t max_num_of_conc_connections = 0;
-	struct policy_mgr_conc_connection_info *pm_conc_connection_list = NULL;
 
 	mac_ctx = sap_get_mac_context();
 	if (!mac_ctx) {
@@ -3416,16 +3411,6 @@ static QDF_STATUS sap_get_freq_list(struct sap_context *sap_ctx,
 		*num_ch = 0;
 		*freq_list = NULL;
 		return QDF_STATUS_E_FAULT;
-	}
-
-	pm_conc_connection_list = policy_mgr_get_conn_info(&max_num_of_conc_connections);
-	if (mac_ctx->psoc) {
-		if (policy_mgr_get_connection_count(mac_ctx->psoc) == 1) {
-			work_freq = pm_conc_connection_list[0].freq;
-			sap_debug("allow sap to use freq %u", work_freq);
-		}
-		is_sap_only_allow_sta_dfs_indoor_chan =
-			policy_mgr_is_sap_only_allow_sta_dfs_indoor_chan(mac_ctx->psoc);
 	}
 
 	weight_list = mac_ctx->mlme_cfg->acs.normalize_weight_chan;
@@ -3518,17 +3503,6 @@ static QDF_STATUS sap_get_freq_list(struct sap_context *sap_ctx,
 					sap_ctx->acs_cfg->freq_list,
 					sap_ctx->acs_cfg->ch_list_count))
 			continue;
-
-		/* Only allow sap to use indoor/dfs channel when sta using same channel.
-		 * Currently, sap can work on the same channel only when a connection
-		 * is working on indoor/dfs channel
-		 */
-		if (mac_ctx->pdev && work_freq != chan_freq &&
-				is_sap_only_allow_sta_dfs_indoor_chan &&
-				(wlan_reg_is_freq_indoor(mac_ctx->pdev, chan_freq) ||
-				wlan_reg_is_dfs_for_freq(mac_ctx->pdev, chan_freq)))
-			continue;
-
 		/* Dont scan DFS channels in case of MCC disallowed
 		 * As it can result in SAP starting on DFS channel
 		 * resulting  MCC on DFS channel
