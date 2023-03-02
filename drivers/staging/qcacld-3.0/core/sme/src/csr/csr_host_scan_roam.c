@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -378,7 +377,7 @@ QDF_STATUS csr_neighbor_roam_process_scan_complete(struct mac_context *mac,
 		qdf_mem_free(filter);
 		return QDF_STATUS_E_FAILURE;
 	}
-	hstatus = csr_scan_get_result(mac, filter, &scanResult, true);
+	hstatus = csr_scan_get_result(mac, filter, &scanResult);
 	qdf_mem_free(filter);
 	if (hstatus != QDF_STATUS_SUCCESS)
 		sme_err("Get Scan Result status code %d", hstatus);
@@ -505,18 +504,12 @@ void csr_neighbor_roam_request_handoff(struct mac_context *mac_ctx,
 		uint8_t session_id)
 {
 	struct csr_roam_info *roam_info;
-	struct csr_roam_session *session = CSR_GET_SESSION(mac_ctx, session_id);
-	tpCsrNeighborRoamControlInfo neighbor_roam_info;
+	tpCsrNeighborRoamControlInfo neighbor_roam_info =
+		&mac_ctx->roam.neighborRoamInfo[session_id];
 	tCsrNeighborRoamBSSInfo handoff_node;
 	uint32_t roamid = 0;
 	QDF_STATUS status;
 
-	if (!session) {
-		sme_err("Session_id invalid %d", session_id);
-		return;
-	}
-
-	neighbor_roam_info = &mac_ctx->roam.neighborRoamInfo[session_id];
 	QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_DEBUG, "%s session_id=%d",
 		  __func__, session_id);
 
@@ -553,7 +546,7 @@ void csr_neighbor_roam_request_handoff(struct mac_context *mac_ctx,
 		eCSR_ROAM_HANDOVER_SUCCESS);
 	/* Free the profile.. Just to make sure we dont leak memory here */
 	csr_release_profile(mac_ctx,
-			    &neighbor_roam_info->csrNeighborRoamProfile);
+		&neighbor_roam_info->csrNeighborRoamProfile);
 	/*
 	 * Create the Handoff AP profile. Copy the currently connected profile
 	 * and update only the BSSID and channel number. This should happen
@@ -579,7 +572,7 @@ void csr_neighbor_roam_request_handoff(struct mac_context *mac_ctx,
 					mac_ctx,
 					session_id,
 					eCSR_DISCONNECT_REASON_HANDOFF,
-					REASON_UNSPEC_FAILURE))) {
+					eSIR_MAC_UNSPEC_FAILURE_REASON))) {
 		sme_warn("csr_roamHandoffRequested: fail to issue disassoc");
 		qdf_mem_free(roam_info);
 		return;

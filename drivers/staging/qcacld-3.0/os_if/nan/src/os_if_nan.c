@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -37,13 +36,12 @@
 #include "wlan_utility.h"
 #include "wlan_osif_request_manager.h"
 #include "wlan_mlme_ucfg_api.h"
-#include "wlan_tdls_ucfg_api.h"
 
 #define NAN_CMD_MAX_SIZE 2048
 
 /* NLA policy */
-const struct nla_policy nan_attr_policy[
-			QCA_WLAN_VENDOR_ATTR_NAN_PARAMS_MAX + 1] = {
+static const struct nla_policy
+nan_attr_policy[QCA_WLAN_VENDOR_ATTR_NAN_PARAMS_MAX + 1] = {
 	[QCA_WLAN_VENDOR_ATTR_NAN_CMD_DATA] = {
 						.type = NLA_BINARY,
 						.len = NAN_CMD_MAX_SIZE
@@ -63,8 +61,8 @@ const struct nla_policy nan_attr_policy[
 };
 
 /* NLA policy */
-const struct nla_policy vendor_attr_policy[
-			QCA_WLAN_VENDOR_ATTR_NDP_PARAMS_MAX + 1] = {
+static const struct nla_policy
+vendor_attr_policy[QCA_WLAN_VENDOR_ATTR_NDP_PARAMS_MAX + 1] = {
 	[QCA_WLAN_VENDOR_ATTR_NDP_SUBCMD] = {
 						.type = NLA_U32,
 						.len = sizeof(uint32_t)
@@ -85,8 +83,10 @@ const struct nla_policy vendor_attr_policy[
 						.type = NLA_U32,
 						.len = sizeof(uint32_t)
 	},
-	[QCA_WLAN_VENDOR_ATTR_NDP_PEER_DISCOVERY_MAC_ADDR] =
-						VENDOR_NLA_POLICY_MAC_ADDR,
+	[QCA_WLAN_VENDOR_ATTR_NDP_PEER_DISCOVERY_MAC_ADDR] = {
+						.type = NLA_UNSPEC,
+						.len = QDF_MAC_ADDR_SIZE
+	},
 	[QCA_WLAN_VENDOR_ATTR_NDP_CONFIG_SECURITY] = {
 						.type = NLA_U16,
 						.len = sizeof(uint16_t)
@@ -156,7 +156,7 @@ const struct nla_policy vendor_attr_policy[
 						.len = sizeof(uint32_t)
 	},
 	[QCA_WLAN_VENDOR_ATTR_NDP_IPV6_ADDR] = {
-						.type = NLA_EXACT_LEN,
+						.type = NLA_UNSPEC,
 						.len = QDF_IPV6_ADDR_SIZE
 	},
 	[QCA_WLAN_VENDOR_ATTR_NDP_TRANSPORT_PORT] = {
@@ -1059,17 +1059,6 @@ int os_if_nan_process_ndp_cmd(struct wlan_objmgr_psoc *psoc,
 
 	switch (ndp_cmd_type) {
 	case QCA_WLAN_VENDOR_ATTR_NDP_INTERFACE_CREATE:
-		/**
-		 * NDI creation is not allowed if NAN discovery is not running.
-		 * Allowing NDI creation when NAN discovery is not enabled may
-		 * lead to issues if NDI has to be started in a
-		 * 2GHz channel and if the target is not operating in DBS mode.
-		 */
-		if ((ucfg_is_nan_conc_control_supported(psoc)) &&
-		    (!ucfg_is_nan_disc_active(psoc))) {
-			osif_err("NDI creation is not allowed when NAN discovery is not running");
-			return -EOPNOTSUPP;
-		}
 		return os_if_nan_process_ndi_create(psoc, tb);
 	case QCA_WLAN_VENDOR_ATTR_NDP_INTERFACE_DELETE:
 		return os_if_nan_process_ndi_delete(psoc, tb);
@@ -1772,9 +1761,10 @@ static void os_if_ndp_end_ind_handler(struct wlan_objmgr_vdev *vdev,
 
 	ndp_instance_array = qdf_mem_malloc(end_ind->num_ndp_ids *
 		sizeof(*ndp_instance_array));
-	if (!ndp_instance_array)
+	if (!ndp_instance_array) {
+		osif_err("Failed to allocate ndp_instance_array");
 		return;
-
+	}
 	for (i = 0; i < end_ind->num_ndp_ids; i++)
 		ndp_instance_array[i] = end_ind->ndp_map[i].ndp_instance_id;
 
@@ -1996,15 +1986,15 @@ static void os_if_ndp_iface_create_rsp_handler(struct wlan_objmgr_psoc *psoc,
 	osif_debug("transaction id: %u status code: %u Reason: %u",
 		   create_transaction_id, create_status, create_reason);
 
+	cfg80211_vendor_event(vendor_event, GFP_KERNEL);
+
 	if (!create_fail) {
 		/* update txrx queues and register self sta */
 		cb_obj.drv_ndi_create_rsp_handler(wlan_vdev_get_id(vdev),
 						  ndi_rsp);
-		cfg80211_vendor_event(vendor_event, GFP_KERNEL);
 	} else {
 		osif_err("NDI interface creation failed with reason %d",
 			 create_reason);
-		cfg80211_vendor_event(vendor_event, GFP_KERNEL);
 		goto close_ndi;
 	}
 
@@ -2514,8 +2504,10 @@ static int os_if_nan_generic_req(struct wlan_objmgr_psoc *psoc,
 	buf_len = nla_len(tb[QCA_WLAN_VENDOR_ATTR_NAN_CMD_DATA]);
 
 	nan_req = qdf_mem_malloc(sizeof(*nan_req) +  buf_len);
-	if (!nan_req)
+	if (!nan_req) {
+		osif_err("Request allocation failure");
 		return -ENOMEM;
+	}
 
 	nan_req->psoc = psoc;
 	nan_req->params.request_data_len = buf_len;
@@ -2578,9 +2570,11 @@ static int os_if_process_nan_enable_req(struct wlan_objmgr_psoc *psoc,
 	buf_len = nla_len(tb[QCA_WLAN_VENDOR_ATTR_NAN_CMD_DATA]);
 
 	nan_req = qdf_mem_malloc(sizeof(*nan_req) + buf_len);
-	if (!nan_req)
-		return -ENOMEM;
 
+	if (!nan_req) {
+		osif_err("Request allocation failure");
+		return -ENOMEM;
+	}
 	nan_req->social_chan_2g_freq = chan_freq_2g;
 	if (chan_freq_5g)
 		nan_req->social_chan_5g_freq = chan_freq_5g;
@@ -2589,7 +2583,6 @@ static int os_if_process_nan_enable_req(struct wlan_objmgr_psoc *psoc,
 
 	ucfg_mlme_get_fine_time_meas_cap(psoc, &fine_time_meas_cap);
 	nan_req->params.rtt_cap = fine_time_meas_cap;
-	nan_req->params.disable_6g_nan = ucfg_get_disable_6g_nan(psoc);
 
 	nla_memcpy(nan_req->params.request_data,
 		   tb[QCA_WLAN_VENDOR_ATTR_NAN_CMD_DATA], buf_len);
@@ -2625,15 +2618,15 @@ int os_if_process_nan_req(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 	}
 
 	/*
-	 * If target does not support NAN DBS, stop the opportunistic timer.
-	 * Opportunistic timer gets triggered as soon as a DBS use case is
-	 * completed and hw_mode would be set to SMM when the timer(5 seconds)
-	 * expires.
-	 * This is to make sure that HW mode is not set to DBS by NAN Enable
-	 * request. NAN state machine will remain unaffected in this case.
+	 * If target does not support NAN DBS, send request with type GENERIC.
+	 * These will be treated as passthrough by the driver. This is to make
+	 * sure that HW mode is not set to DBS by NAN Enable request. NAN state
+	 * machine will remain unaffected in this case.
 	 */
-	if (!NAN_CONCURRENCY_SUPPORTED(psoc))
+	if (!ucfg_is_nan_dbs_supported(psoc)) {
 		policy_mgr_check_and_stop_opportunistic_timer(psoc, vdev_id);
+		return os_if_nan_generic_req(psoc, tb);
+	}
 
 	/*
 	 * Send all requests other than Enable/Disable as type GENERIC.

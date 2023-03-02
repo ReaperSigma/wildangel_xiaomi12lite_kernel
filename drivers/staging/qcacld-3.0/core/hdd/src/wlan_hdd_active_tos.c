@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -56,7 +55,7 @@ static int limit_off_chan_tbl[QCA_WLAN_AC_ALL][HDD_MAX_OFF_CHAN_ENTRIES] = {
 		{ HDD_AC_VO_BIT, HDD_MAX_OFF_CHAN_TIME_FOR_VO },
 };
 
-const struct nla_policy
+static const struct nla_policy
 wlan_hdd_set_limit_off_channel_param_policy
 [QCA_WLAN_VENDOR_ATTR_ACTIVE_TOS_MAX + 1] = {
 	[QCA_WLAN_VENDOR_ATTR_ACTIVE_TOS] = {.type = NLA_U8 },
@@ -166,11 +165,6 @@ __wlan_hdd_cfg80211_set_limit_offchan_param(struct wiphy *wiphy,
 	uint8_t tos_status;
 
 	hdd_enter();
-
-	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
-		hdd_err("Command not allowed in FTM mode");
-		return -EPERM;
-	}
 
 	ret = wlan_hdd_validate_context(hdd_ctx);
 	if (ret < 0)

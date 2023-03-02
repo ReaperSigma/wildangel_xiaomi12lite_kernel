@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -34,15 +33,12 @@
 #endif
 
 #include "ol_txrx_api.h"
-#ifdef WLAN_FEATURE_TSF_UPLINK_DELAY
-#include <cdp_txrx_ctrl.h>
-#endif
 
 #ifdef WLAN_FEATURE_TSF_PLUS
-#if !defined(WLAN_FEATURE_TSF_PLUS_NOIRQ) && \
-	!defined(WLAN_FEATURE_TSF_PLUS_EXT_GPIO_SYNC) && \
-	!defined(WLAN_FEATURE_TSF_TIMER_SYNC)
+#ifndef WLAN_FEATURE_TSF_PLUS_NOIRQ
+#ifndef WLAN_FEATURE_TSF_PLUS_EXT_GPIO_SYNC
 static int tsf_gpio_irq_num = -1;
+#endif
 #endif
 #endif
 static struct completion tsf_sync_get_completion_evt;
@@ -58,8 +54,7 @@ static struct completion tsf_sync_get_completion_evt;
 #define OUTPUT_LOW 0
 
 #ifdef WLAN_FEATURE_TSF_PLUS
-#if defined(WLAN_FEATURE_TSF_PLUS_NOIRQ) || \
-	defined(WLAN_FEATURE_TSF_TIMER_SYNC)
+#ifdef WLAN_FEATURE_TSF_PLUS_NOIRQ
 static void hdd_update_timestamp(struct hdd_adapter *adapter);
 #else
 static void
@@ -942,52 +937,6 @@ static inline int32_t hdd_get_soctime_from_tsf64time(
 	return ret;
 }
 
-/**
- * hdd_get_tsftime_from_qtime()
- *
- * @adapter: Adapter pointer
- * @qtime: current qtime, us
- * @tsf_sync_qtime: qtime of the tsf, us
- * @tsf_time: current tsf time(qtime), us
- *
- * This function determines current tsf time
- * using current qtime
- *
- * Return: 0 for success or non-zero negative failure code
- */
-static inline int32_t
-hdd_get_tsftime_from_qtime(struct hdd_adapter *adapter, uint64_t qtime,
-			   uint64_t tsf_sync_qtime, uint64_t *tsf_time)
-{
-	int32_t ret = -EINVAL;
-	uint64_t delta64_tsf64time;
-	bool in_cap_state;
-
-	in_cap_state = hdd_tsf_is_in_cap(adapter);
-
-	/*
-	 * To avoid check the lock when it's not capturing tsf
-	 * (the tstamp-pair won't be changed)
-	 */
-	if (in_cap_state)
-		qdf_spin_lock_bh(&adapter->host_target_sync_lock);
-
-	if (qtime > tsf_sync_qtime) {
-		delta64_tsf64time = qtime - tsf_sync_qtime;
-		ret = hdd_uint64_plus(adapter->last_target_time,
-				      delta64_tsf64time, tsf_time);
-	} else {
-		delta64_tsf64time = tsf_sync_qtime - qtime;
-		ret = hdd_uint64_minus(adapter->last_target_time,
-				       delta64_tsf64time, tsf_time);
-	}
-
-	if (in_cap_state)
-		qdf_spin_unlock_bh(&adapter->host_target_sync_lock);
-
-	return ret;
-}
-
 static void hdd_capture_tsf_timer_expired_handler(void *arg)
 {
 	uint32_t tsf_op_resp;
@@ -1001,9 +950,7 @@ static void hdd_capture_tsf_timer_expired_handler(void *arg)
 }
 
 #ifndef WLAN_FEATURE_TSF_PLUS_NOIRQ
-#if !defined(WLAN_FEATURE_TSF_PLUS_EXT_GPIO_SYNC) && \
-	!defined(WLAN_FEATURE_TSF_TIMER_SYNC)
-
+#ifndef WLAN_FEATURE_TSF_PLUS_EXT_GPIO_SYNC
 static irqreturn_t hdd_tsf_captured_irq_handler(int irq, void *arg)
 {
 	struct hdd_adapter *adapter;
@@ -1092,8 +1039,7 @@ void hdd_capture_req_timer_expired_handler(void *arg)
 	qdf_mc_timer_start(sync_timer, interval);
 }
 
-#if defined(WLAN_FEATURE_TSF_PLUS_NOIRQ) || \
-	defined(WLAN_FEATURE_TSF_TIMER_SYNC)
+#ifdef WLAN_FEATURE_TSF_PLUS_NOIRQ
 static void hdd_update_timestamp(struct hdd_adapter *adapter)
 {
 	int interval = 0;
@@ -1182,7 +1128,7 @@ static ssize_t __hdd_wlan_tsf_show(struct device *dev,
 	struct hdd_station_ctx *hdd_sta_ctx;
 	struct hdd_adapter *adapter;
 	struct hdd_context *hdd_ctx;
-	uint64_t tsf_sync_qtime, host_time, reg_qtime, qtime, target_time;
+	uint64_t tsf_sync_qtime, host_time, reg_qtime, qtime;
 	ssize_t size;
 
 	struct net_device *net_dev = container_of(dev, struct net_device, dev);
@@ -1214,24 +1160,20 @@ static ssize_t __hdd_wlan_tsf_show(struct device *dev,
 
 	qtime = qdf_log_timestamp_to_usecs(reg_qtime);
 	do_div(host_time, NSEC_PER_USEC);
-	hdd_get_tsftime_from_qtime(adapter, qtime, tsf_sync_qtime,
-				   &target_time);
 
 	if (adapter->device_mode == QDF_STA_MODE ||
 	    adapter->device_mode == QDF_P2P_CLIENT_MODE) {
-		size = scnprintf(buf, PAGE_SIZE,
-				 "%s%llu %llu %pM %llu %llu %llu\n",
+		size = scnprintf(buf, PAGE_SIZE, "%s%llu %llu "QDF_FULL_MAC_FMT" %llu %llu\n",
 				 buf, adapter->last_target_time,
 				 tsf_sync_qtime,
-				 hdd_sta_ctx->conn_info.bssid.bytes,
-				 qtime, host_time, target_time);
+				 QDF_FULL_MAC_REF(hdd_sta_ctx->conn_info.bssid.bytes),
+				 qtime, host_time);
 	} else {
-		size = scnprintf(buf, PAGE_SIZE,
-				 "%s%llu %llu %pM %llu %llu %llu\n",
+		size = scnprintf(buf, PAGE_SIZE, "%s%llu %llu "QDF_FULL_MAC_FMT" %llu %llu\n",
 				 buf, adapter->last_target_time,
 				 tsf_sync_qtime,
-				 adapter->mac_addr.bytes,
-				 qtime, host_time, target_time);
+				 QDF_FULL_MAC_REF(adapter->mac_addr.bytes),
+				 qtime, host_time);
 	}
 
 	return size;
@@ -1375,13 +1317,13 @@ static ssize_t __hdd_wlan_tsf_show(struct device *dev,
 	} else {
 		if (adapter->device_mode == QDF_STA_MODE ||
 		    adapter->device_mode == QDF_P2P_CLIENT_MODE) {
-			size = scnprintf(buf, PAGE_SIZE, "%s%llu %llu %pM\n",
+			size = scnprintf(buf, PAGE_SIZE, "%s%llu %llu "QDF_FULL_MAC_FMT"\n",
 					 buf, target_time, host_time,
-					 hdd_sta_ctx->conn_info.bssid.bytes);
+					 QDF_FULL_MAC_REF(hdd_sta_ctx->conn_info.bssid.bytes));
 		} else {
-			size = scnprintf(buf, PAGE_SIZE, "%s%llu %llu %pM\n",
+			size = scnprintf(buf, PAGE_SIZE, "%s%llu %llu "QDF_FULL_MAC_FMT"\n",
 					 buf, target_time, host_time,
-					 adapter->mac_addr.bytes);
+					 QDF_FULL_MAC_REF(adapter->mac_addr.bytes));
 		}
 	}
 
@@ -1890,33 +1832,6 @@ enum hdd_tsf_op_result wlan_hdd_tsf_plus_init(struct hdd_context *hdd_ctx)
 static inline
 enum hdd_tsf_op_result wlan_hdd_tsf_plus_deinit(struct hdd_context *hdd_ctx)
 {
-	QDF_STATUS status;
-	QDF_TIMER_STATE capture_req_timer_status;
-	qdf_mc_timer_t *cap_timer;
-	struct hdd_adapter *adapter, *adapternode_ptr, *next_ptr;
-
-	status = hdd_get_front_adapter(hdd_ctx, &adapternode_ptr);
-
-	while (adapternode_ptr && QDF_STATUS_SUCCESS == status) {
-		adapter = adapternode_ptr;
-		status =
-		    hdd_get_next_adapter(hdd_ctx, adapternode_ptr, &next_ptr);
-		adapternode_ptr = next_ptr;
-		if (adapter->host_capture_req_timer.state == 0)
-			continue;
-		cap_timer = &adapter->host_capture_req_timer;
-		capture_req_timer_status =
-			qdf_mc_timer_get_current_state(cap_timer);
-
-		if (capture_req_timer_status != QDF_TIMER_STATE_UNUSED) {
-			qdf_mc_timer_stop(cap_timer);
-			status =
-				qdf_mc_timer_destroy(cap_timer);
-			if (status != QDF_STATUS_SUCCESS)
-				hdd_err_rl("remove timer failed: %d", status);
-		}
-	}
-
 	return HDD_TSF_OP_SUCC;
 }
 #else
@@ -2207,138 +2122,6 @@ static void wlan_hdd_phc_deinit(struct hdd_context *hdd_ctx)
 }
 #endif /* WLAN_FEATURE_TSF_PTP */
 
-#ifdef WLAN_FEATURE_TSF_TIMER_SYNC
-/**
- * hdd_convert_qtime_to_us() - convert qtime to us
- * @time: QTIMER ticks for adrastea and us for Lithium
- *
- * This function converts qtime to us.
- *
- * Return: Time in microseconds
- */
-static inline uint64_t
-hdd_convert_qtime_to_us(uint64_t time)
-{
-	return time;
-}
-
-#else
-static inline uint64_t
-hdd_convert_qtime_to_us(uint64_t time)
-{
-	return qdf_log_timestamp_to_usecs(time);
-}
-#endif
-
-#ifdef WLAN_FEATURE_TSF_UPLINK_DELAY
-static int hdd_set_tsf_auto_report(struct hdd_adapter *adapter, bool ena)
-{
-	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
-	int ret;
-
-	if (QDF_IS_STATUS_ERROR(cdp_set_tsf_ul_delay_report(soc,
-							    adapter->vdev_id,
-							    ena))) {
-		hdd_err_rl("Set tsf report uplink delay failed");
-		return -EPERM;
-	}
-
-	ret = wma_cli_set_command((int)adapter->vdev_id,
-				  ena ? (int)GEN_PARAM_TSF_AUTO_REPORT_ENABLE :
-				  (int)GEN_PARAM_TSF_AUTO_REPORT_DISABLE,
-				  ena, GEN_CMD);
-	if (ret) {
-		hdd_err_rl("tsf auto report %d failed", ena);
-		return -EINPROGRESS;
-	}
-
-	qdf_atomic_set(&adapter->tsf_auto_report, ena);
-
-	return 0;
-}
-
-/**
- * hdd_handle_tsf_auto_report(): Handle TSF auto report enable or disable
- * @adapter: pointer of struct hdd_adapter
- * @tsf_cmd: TSF command from user space
- *
- * Return: 0 for success, -EINVAL to continue to handle other TSF commands and
- *	   else errors
- */
-static int hdd_handle_tsf_auto_report(struct hdd_adapter *adapter,
-				      uint32_t tsf_cmd)
-{
-	bool ena;
-
-	if (tsf_cmd != QCA_TSF_AUTO_REPORT_ENABLE &&
-	    tsf_cmd != QCA_TSF_AUTO_REPORT_DISABLE) {
-		hdd_debug_rl("tsf_cmd %d not for uplink delay", tsf_cmd);
-		return -EINVAL;
-	}
-
-	/* uplink delay feature is only required for STA mode */
-	if (adapter->device_mode != QDF_STA_MODE) {
-		hdd_debug_rl("tsf_cmd %d not allowed for device mode %d",
-			     tsf_cmd, adapter->device_mode);
-		return -EPERM;
-	}
-
-	ena = (tsf_cmd == QCA_TSF_AUTO_REPORT_ENABLE) ? true : false;
-
-	return hdd_set_tsf_auto_report(adapter, ena);
-}
-
-static QDF_STATUS hdd_set_delta_tsf(struct hdd_adapter *adapter,
-				    struct stsf *ptsf)
-{
-	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
-	uint32_t delta_tsf;
-
-	/* If TSF report is for uplink delay, mac_id_valid will be set to
-	 * 1 by target. If not, the report is not for uplink delay feature
-	 * and return failure here so that legacy BSS TSF logic can be
-	 * continued.
-	 */
-	if (!ptsf->mac_id_valid) {
-		hdd_debug_rl("TSF report not for uplink delay");
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	/* For uplink delay feature, TSF auto report needs to be enabled
-	 * first. Otherwise TSF event will not be posted by target.
-	 */
-	if (!qdf_atomic_read(&adapter->tsf_auto_report)) {
-		hdd_debug_rl("adapter %u tsf_auto_report disabled",
-			     adapter->vdev_id);
-		goto exit_with_success;
-	}
-
-	delta_tsf = ptsf->tsf_low - ptsf->soc_timer_low;
-	hdd_debug("vdev %u tsf_low %u qtimer_low %u delta_tsf %u",
-		  ptsf->vdev_id, ptsf->tsf_low, ptsf->soc_timer_low, delta_tsf);
-
-	/* Pass delta_tsf to DP layer to report uplink delay
-	 * on a per vdev basis
-	 */
-	cdp_set_delta_tsf(soc, adapter->vdev_id, delta_tsf);
-
-exit_with_success:
-	return QDF_STATUS_SUCCESS;
-}
-#else /* !WLAN_FEATURE_TSF_UPLINK_DELAY */
-static inline int hdd_handle_tsf_auto_report(struct hdd_adapter *adapter,
-					     uint32_t tsf_cmd)
-{
-	return -EINVAL;
-}
-
-static inline QDF_STATUS hdd_set_delta_tsf(struct hdd_adapter *adapter,
-					   struct stsf *ptsf)
-{
-	return QDF_STATUS_E_FAILURE;
-}
-#endif /* WLAN_FEATURE_TSF_UPLINK_DELAY */
-
 /**
  * hdd_get_tsf_cb() - handle tsf callback
  * @pcb_cxt: pointer to the hdd_contex
@@ -2378,14 +2161,6 @@ int hdd_get_tsf_cb(void *pcb_cxt, struct stsf *ptsf)
 		return -EINVAL;
 	}
 
-	/* Intercept tsf report and check if it is for uplink delay.
-	 * If yes, return in advance and skip the legacy BSS TSF
-	 * report. Otherwise continue on to the legacy BSS TSF
-	 * report logic.
-	 */
-	if (QDF_IS_STATUS_SUCCESS(hdd_set_delta_tsf(adapter, ptsf)))
-		return 0;
-
 	if (!hdd_tsf_is_initialized(adapter)) {
 		hdd_err("tsf is not init, ignore tsf event");
 		return -EINVAL;
@@ -2416,7 +2191,7 @@ int hdd_get_tsf_cb(void *pcb_cxt, struct stsf *ptsf)
 	tsf_sync_soc_time = ((uint64_t)ptsf->soc_timer_high << 32 |
 			ptsf->soc_timer_low);
 	adapter->cur_tsf_sync_soc_time =
-		hdd_convert_qtime_to_us(tsf_sync_soc_time) * NSEC_PER_USEC;
+		qdf_log_timestamp_to_usecs(tsf_sync_soc_time) * NSEC_PER_USEC;
 	complete(&tsf_sync_get_completion_evt);
 	hdd_update_tsf(adapter, adapter->cur_target_time);
 	hdd_info("Vdev=%u, tsf_low=%u, tsf_high=%u ptsf->soc_timer_low=%u ptsf->soc_timer_high=%u",
@@ -2425,7 +2200,7 @@ int hdd_get_tsf_cb(void *pcb_cxt, struct stsf *ptsf)
 	return 0;
 }
 
-const struct nla_policy tsf_policy[QCA_WLAN_VENDOR_ATTR_TSF_MAX + 1] = {
+static const struct nla_policy tsf_policy[QCA_WLAN_VENDOR_ATTR_TSF_MAX + 1] = {
 	[QCA_WLAN_VENDOR_ATTR_TSF_CMD] = {.type = NLA_U32},
 };
 
@@ -2455,11 +2230,6 @@ static int __wlan_hdd_cfg80211_handle_tsf_cmd(struct wiphy *wiphy,
 
 	hdd_enter_dev(wdev->netdev);
 
-	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
-		hdd_err("Command not allowed in FTM mode");
-		return -EPERM;
-	}
-
 	status = wlan_hdd_validate_context(hdd_ctx);
 	if (0 != status)
 		return -EINVAL;
@@ -2475,14 +2245,6 @@ static int __wlan_hdd_cfg80211_handle_tsf_cmd(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 	tsf_cmd = nla_get_u32(tb_vendor[QCA_WLAN_VENDOR_ATTR_TSF_CMD]);
-
-	/* Intercept tsf_cmd for TSF auto report enable or disable subcmds.
-	 * If status is -EINVAL, it means tsf_cmd is not for auto report and
-	 * need to continue to handle other tsf cmds.
-	 */
-	status = hdd_handle_tsf_auto_report(adapter, tsf_cmd);
-	if (status != -EINVAL)
-		goto end;
 
 	if (tsf_cmd == QCA_TSF_CAPTURE || tsf_cmd == QCA_TSF_SYNC_GET) {
 		hdd_capture_tsf(adapter, tsf_op_resp, 1);

@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -51,6 +50,7 @@
 #define GET_LIM_SYSTEM_ROLE(pe_session)      (pe_session->limSystemRole)
 #define LIM_IS_AP_ROLE(pe_session)           (GET_LIM_SYSTEM_ROLE(pe_session) == eLIM_AP_ROLE)
 #define LIM_IS_STA_ROLE(pe_session)          (GET_LIM_SYSTEM_ROLE(pe_session) == eLIM_STA_ROLE)
+#define LIM_IS_IBSS_ROLE(pe_session)         (GET_LIM_SYSTEM_ROLE(pe_session) == eLIM_STA_IN_IBSS_ROLE)
 #define LIM_IS_UNKNOWN_ROLE(pe_session)      (GET_LIM_SYSTEM_ROLE(pe_session) == eLIM_UNKNOWN_ROLE)
 #define LIM_IS_P2P_DEVICE_ROLE(pe_session)   (GET_LIM_SYSTEM_ROLE(pe_session) == eLIM_P2P_DEVICE_ROLE)
 #define LIM_IS_P2P_DEVICE_GO(pe_session)     (GET_LIM_SYSTEM_ROLE(pe_session) == eLIM_P2P_DEVICE_GO)
@@ -135,15 +135,6 @@ typedef enum eMgmtFrmDropReason {
 	eMGMT_DROP_DUPLICATE_AUTH_FRAME,
 	eMGMT_DROP_EXCESSIVE_MGMT_FRAME,
 } tMgmtFrmDropReason;
-
-/**
- * is_mgmt_protected  -  check RMF enabled for the peer
- * @vdev_id: vdev id
- * @peer_mac_addr: peer mac address
- *
- * Return: True if RMF enabled and key is installed
- */
-bool is_mgmt_protected(uint32_t vdev_id, const uint8_t *peer_mac_addr);
 
 /**
  * Function to initialize LIM state machines.
@@ -231,6 +222,46 @@ QDF_STATUS lim_post_msg_high_priority(struct mac_context *mac,
  * and dispatch to various sub modules within LIM module.
  */
 void lim_message_processor(struct mac_context *, struct scheduler_msg *);
+
+#ifdef QCA_IBSS_SUPPORT
+/**
+ * lim_handle_ibss_coalescing() - Function to handle IBSS coalescing.
+ * @param  mac	  - Pointer to Global MAC structure
+ * @param  pBeacon - Parsed Beacon Frame structure
+ * @param  pRxPacketInfo - Pointer to RX packet info structure
+ * @pe_session - pointer to pe session
+ *
+ * This function is called upon receiving Beacon/Probe Response
+ * while operating in IBSS mode.
+ *
+ * @return Status whether to process or ignore received Beacon Frame
+ */
+QDF_STATUS
+lim_handle_ibss_coalescing(struct mac_context *mac,
+			   tpSchBeaconStruct pBeacon,
+			   uint8_t *pRxPacketInfo,
+			   struct pe_session *pe_session);
+#else
+/**
+ * lim_handle_ibss_coalescing() - Function to handle IBSS coalescing.
+ * @param  mac	  - Pointer to Global MAC structure
+ * @param  pBeacon - Parsed Beacon Frame structure
+ * @param  pRxPacketInfo - Pointer to RX packet info structure
+ * @pe_session - pointer to pe session
+ *
+ * This function is dummy
+ *
+ * @return Status whether to process or ignore received Beacon Frame
+ */
+static inline QDF_STATUS
+lim_handle_ibss_coalescing(struct mac_context *mac,
+			   tpSchBeaconStruct pBeacon,
+			   uint8_t *pRxPacketInfo,
+			   struct pe_session *pe_session)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
 
 /* / Function used by other Sirius modules to read global SME state */
 static inline tLimSmeStates lim_get_sme_state(struct mac_context *mac)
@@ -509,24 +540,6 @@ void lim_handle_sap_beacon(struct wlan_objmgr_pdev *pdev,
  * Return: AKM type
  */
 enum ani_akm_type lim_translate_rsn_oui_to_akm_type(uint8_t auth_suite[4]);
-
-#ifdef WLAN_SUPPORT_TWT
-/**
- * lim_fill_roamed_peer_twt_caps() - Update Peer TWT capabilities
- * @mac_ctx: Pointer to mac context
- * @vdev_id: vdev id
- * @roam_synch: Pointer to roam synch indication
- *
- * Return: None
- */
-void lim_fill_roamed_peer_twt_caps(struct mac_context *mac_ctx, uint8_t vdev_id,
-				   struct roam_offload_synch_ind *roam_synch);
-#else
-static inline
-void lim_fill_roamed_peer_twt_caps(struct mac_context *mac_ctx, uint8_t vdev_id,
-				   struct roam_offload_synch_ind *roam_synch)
-{}
-#endif
 
 /************************************************************/
 #endif /* __LIM_API_H */

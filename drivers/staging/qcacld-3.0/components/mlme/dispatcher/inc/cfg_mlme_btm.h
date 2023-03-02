@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -89,12 +89,9 @@
  * 10, 11 reserved
  *
  * BIT 5, 4, 3: Roaming handoff decisions on multiple candidates match
- * for unsolicited BTM request.
  * 000 match if exact BSSIDs are found
  * 001 match if at least one top priority BSSID only
  * 010, 011, 100, 101, 110, 111 reserved
- * In case of solicited request intersection of Roam cache/candidates
- * with candidates in BTM request is taken into consideration.
  *
  * BIT 6: Set this to 1 will send BTM query frame and 0 not sent.
  *
@@ -103,14 +100,7 @@
  *
  * BIT 8: BTM query preference over 11k neighbor report request
  *
- * BIT 9: BTM query with candidate list
- *
- * BIT 10: When this bit is set, Firmware will forward BTM Request Frame to
- * driver when the frame contains MBO assoc retry attribute. Driver will send
- * this frame to supplicant and supplicant will use the frame info for
- * blacklisting the AP so for the next connection framework will avoid this AP.
- *
- * BIT 11-31: Reserved
+ * BIT 9-31: Reserved
  *
  * Supported Feature: STA
  *

@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -30,7 +29,6 @@
 #include "qdf_status.h"
 #include "nan_public_structs.h"
 #include "wlan_objmgr_cmn.h"
-#include "cfg_nan.h"
 
 struct wlan_objmgr_vdev;
 struct wlan_objmgr_psoc;
@@ -90,7 +88,6 @@ enum nan_disc_state {
  * @nan_feature_config: Bitmap to enable/disable a particular NAN feature
  *                      configuration in firmware. It's sent to firmware through
  *                      WMI_VDEV_PARAM_ENABLE_DISABLE_NAN_CONFIG_FEATURES
- * @disable_6g_nan: Disable NAN in 6GHz frequency band
  */
 struct nan_cfg_params {
 	bool enable;
@@ -103,7 +100,6 @@ struct nan_cfg_params {
 	uint32_t max_ndp_sessions;
 	uint32_t max_ndi;
 	uint32_t nan_feature_config;
-	bool disable_6g_nan;
 };
 
 /**
@@ -120,8 +116,7 @@ struct nan_cfg_params {
  * @nan_disc_mac_id: MAC id used for NAN Discovery
  * @is_explicit_disable: Flag to indicate that NAN is being explicitly
  * disabled by driver or user-space
- * @ndp_request_ctx: NDP request context
- * @nan_disc_request_ctx: NAN discovery enable/disable request context
+ * @request_context: NAN enable/disable request context
  */
 struct nan_psoc_priv_obj {
 	qdf_spinlock_t lock;
@@ -135,8 +130,7 @@ struct nan_psoc_priv_obj {
 	uint32_t nan_social_ch_5g_freq;
 	uint8_t nan_disc_mac_id;
 	bool is_explicit_disable;
-	void *ndp_request_ctx;
-	void *nan_disc_request_ctx;
+	void *request_context;
 };
 
 /**
@@ -152,7 +146,6 @@ struct nan_psoc_priv_obj {
  * @disable_context: Disable all NDP's operation context
  * @ndp_init_done: Flag to indicate NDP initialization complete after first peer
  *		   connection.
- * @peer_mc_addr_list: Peer multicast address list
  */
 struct nan_vdev_priv_obj {
 	qdf_spinlock_t lock;
@@ -165,7 +158,6 @@ struct nan_vdev_priv_obj {
 	struct qdf_mac_addr primary_peer_mac;
 	void *disable_context;
 	bool ndp_init_done;
-	struct qdf_mac_addr peer_mc_addr_list[MAX_NDP_SESSIONS];
 };
 
 /**
@@ -202,9 +194,9 @@ QDF_STATUS nan_scheduled_msg_handler(struct scheduler_msg *msg);
  * nan_discovery_flush_callback: callback to flush the NAN scheduler msg
  * @msg: pointer to msg
  *
- * Return: QDF_STATUS
+ * Return: None
  */
-QDF_STATUS nan_discovery_flush_callback(struct scheduler_msg *msg);
+void nan_discovery_flush_callback(struct scheduler_msg *msg);
 
 /**
  * nan_discovery_scheduled_handler: callback pointer to be called when scheduler

@@ -55,8 +55,6 @@ typedef struct sDphQosParams {
 	uint8_t addtsPresent;
 	tSirAddtsReqInfo addts;
 	tSirMacQosCapabilityStaIE capability;
-	/*AP EDCA params, extracted from assoc resp*/
-	tSirMacEdcaParamSetIE peer_edca_params;
 } tDphQosParams;
 
 /**
@@ -104,7 +102,6 @@ typedef struct sDphHashNode {
 	uint8_t wsmEnabled:1;
 	uint8_t fAniCount:1;
 	uint8_t rmfEnabled:1;
-	uint8_t ocv_enabled:1;
 	/* LIM state */
 	struct lim_sta_context mlmStaContext;
 	/* qos parameter info */
@@ -187,8 +184,6 @@ typedef struct sDphHashNode {
 
 #ifdef WLAN_FEATURE_11AX
 	tDot11fIEhe_cap he_config;
-	uint16_t he_mcs_12_13_map;
-	tDot11fIEhe_6ghz_band_cap he_6g_band_cap;
 #endif
 	/* Peer operation class, extracted from ASSOC request frame*/
 	tDot11fIESuppOperatingClasses supp_operating_classes;

@@ -113,16 +113,16 @@
 #define CFG_VHT_RX_SUPP_DATA_RATE CFG_UINT( \
 		"rx_supp_data_rate", \
 		0, \
-		780, \
-		780, \
+		866, \
+		866, \
 		CFG_VALUE_OR_DEFAULT, \
 		"VHT RX SUPP DATA RATE")
 
 #define CFG_VHT_TX_SUPP_DATA_RATE CFG_UINT( \
 		"tx_supp_data_rate", \
 		0, \
-		780, \
-		780, \
+		866, \
+		866, \
 		CFG_VALUE_OR_DEFAULT, \
 		"VHT TX SUPP DATA RATE")
 
@@ -258,7 +258,7 @@
  *
  * Supported Feature: 11AC
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -286,7 +286,7 @@
  *
  * Supported Feature: 11AC
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -499,7 +499,7 @@
  * Supported Feature: SAP
  *
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -594,7 +594,7 @@
  */
 #define CFG_ENABLE_SUBFEE_IN_VENDOR_VHTIE CFG_INI_BOOL( \
 			"enable_subfee_vendor_vhtie", \
-			1, \
+			0, \
 			"Enable subfee in vendor vht ie")
 
 #define CFG_VHT_CAPS_ALL \

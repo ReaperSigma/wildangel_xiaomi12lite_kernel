@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016, 2018-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016, 2018-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -44,16 +44,16 @@
  *
  * Return: None
  */
-static inline void mac_trace(struct mac_context *mac_ctx, uint16_t code,
+static inline void mac_trace(struct mac_context *mac_ctx, uint8_t code,
 			     uint16_t session, uint32_t data)
 {
 	qdf_trace(QDF_MODULE_ID_PE, code, session, data);
 }
 
+#ifdef TRACE_RECORD
+
 #define eLOG_NODROP_MISSED_BEACON_SCENARIO 0
 #define eLOG_PROC_DEAUTH_FRAME_SCENARIO 1
-
-#ifdef TRACE_RECORD
 
 uint8_t *mac_trace_get_lim_msg_string(uint16_t limMsg);
 uint8_t *mac_trace_get_sme_msg_string(uint16_t smeMsg);

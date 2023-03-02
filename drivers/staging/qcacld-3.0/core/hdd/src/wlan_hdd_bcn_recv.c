@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2019-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -41,9 +40,8 @@
 #define CHAR_BIT 8	/* Normally in <limits.h> */
 #endif
 
-const struct nla_policy
-	beacon_reporting_params_policy
-	[QCA_WLAN_VENDOR_ATTR_BEACON_REPORTING_MAX + 1] = {
+static const struct nla_policy
+beacon_reporting_params[QCA_WLAN_VENDOR_ATTR_BEACON_REPORTING_MAX + 1] = {
 	[QCA_WLAN_VENDOR_ATTR_BEACON_REPORTING_OP_TYPE] = {.type = NLA_U8},
 	[QCA_WLAN_VENDOR_ATTR_BEACON_REPORTING_ACTIVE_REPORTING] = {.type =
 								     NLA_FLAG},
@@ -322,11 +320,6 @@ static int __wlan_hdd_cfg80211_bcn_rcv_op(struct wiphy *wiphy,
 
 	hdd_enter_dev(dev);
 
-	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
-		hdd_err("Command not allowed in FTM mode");
-		return -EPERM;
-	}
-
 	errno = hdd_validate_adapter(adapter);
 	if (errno)
 		return errno;
@@ -357,8 +350,7 @@ static int __wlan_hdd_cfg80211_bcn_rcv_op(struct wiphy *wiphy,
 	errno =
 	   wlan_cfg80211_nla_parse(tb,
 				   QCA_WLAN_VENDOR_ATTR_BEACON_REPORTING_MAX,
-				   data,
-				   data_len, beacon_reporting_params_policy);
+				   data, data_len, beacon_reporting_params);
 	if (errno) {
 		hdd_err("Failed to parse the beacon reporting params %d",
 			errno);
@@ -492,7 +484,7 @@ void hdd_beacon_recv_pause_indication(hdd_handle_t hdd_handle,
 							    adapter);
 
 		switch (type) {
-		case SCAN_EVENT_TYPE_STARTED:
+		case SCAN_EVENT_TYPE_FOREIGN_CHANNEL:
 			abort_reason =
 		     QCA_WLAN_VENDOR_BEACON_REPORTING_PAUSE_REASON_SCAN_STARTED;
 			break;

@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -353,7 +352,7 @@ nan_increment_ndp_sessions(struct wlan_objmgr_psoc *psoc,
 			     sizeof(struct nan_datapath_channel_info));
 
 	peer_nan_obj->active_ndp_sessions++;
-	nan_debug("Number of active session = %d for peer:"QDF_MAC_ADDR_FMT,
+	nan_debug("Number of active session = %d for peer:"QDF_MAC_ADDR_FMT"",
 		  peer_nan_obj->active_ndp_sessions,
 		  QDF_MAC_ADDR_REF(peer_ndi_mac->bytes));
 	qdf_spin_unlock_bh(&peer_nan_obj->lock);
@@ -392,7 +391,7 @@ static QDF_STATUS nan_decrement_ndp_sessions(struct wlan_objmgr_psoc *psoc,
 		return QDF_STATUS_E_FAILURE;
 	}
 	peer_nan_obj->active_ndp_sessions--;
-	nan_debug("Number of active session = %d for peer:"QDF_MAC_ADDR_FMT,
+	nan_debug("Number of active session = %d for peer:"QDF_MAC_ADDR_FMT"",
 		  peer_nan_obj->active_ndp_sessions,
 		  QDF_MAC_ADDR_REF(peer_ndi_mac->bytes));
 	qdf_spin_unlock_bh(&peer_nan_obj->lock);
@@ -448,14 +447,14 @@ ndi_remove_and_update_primary_connection(struct wlan_objmgr_psoc *psoc,
 		peer = peer_next;
 	}
 
-	if (!peer && NDI_CONCURRENCY_SUPPORTED(psoc)) {
+	if (!peer && psoc_nan_obj->nan_caps.ndi_dbs_supported) {
 		policy_mgr_decr_session_set_pcl(psoc, QDF_NDI_MODE,
 						wlan_vdev_get_id(vdev));
 		vdev_nan_obj->ndp_init_done = false;
 		return QDF_STATUS_SUCCESS;
 	}
 
-	if (peer_nan_obj && NDI_CONCURRENCY_SUPPORTED(psoc)) {
+	if (peer_nan_obj && psoc_nan_obj->nan_caps.ndi_dbs_supported) {
 		psoc_nan_obj->cb_obj.update_ndi_conn(wlan_vdev_get_id(vdev),
 						 &peer_nan_obj->home_chan_info);
 		policy_mgr_update_connection_info(psoc, wlan_vdev_get_id(vdev));
@@ -524,34 +523,14 @@ ndi_update_ndp_session(struct wlan_objmgr_vdev *vdev,
 	return QDF_STATUS_SUCCESS;
 }
 
-static QDF_STATUS
-ndi_update_policy_mgr_conn_table(struct nan_datapath_confirm_event *confirm,
-				 struct wlan_objmgr_psoc *psoc, uint8_t vdev_id)
+static QDF_STATUS nan_handle_confirm(
+				struct nan_datapath_confirm_event *confirm)
 {
-	QDF_STATUS status = QDF_STATUS_SUCCESS;
-
-	if (policy_mgr_is_hw_dbs_capable(psoc)) {
-		status = policy_mgr_update_and_wait_for_connection_update(psoc,
-					vdev_id, confirm->ch[0].freq,
-					POLICY_MGR_UPDATE_REASON_NDP_UPDATE);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			nan_err("Failed to set or wait for HW mode change");
-			return status;
-		}
-	}
-
-	policy_mgr_incr_active_session(psoc, QDF_NDI_MODE, vdev_id);
-
-	return status;
-}
-
-static QDF_STATUS nan_handle_confirm(struct nan_datapath_confirm_event *confirm)
-{
-	uint8_t vdev_id;
+	uint8_t vdev_id, channel;
 	struct wlan_objmgr_psoc *psoc;
 	struct nan_psoc_priv_obj *psoc_nan_obj;
 	struct nan_vdev_priv_obj *vdev_nan_obj;
-	struct wlan_objmgr_peer *peer;
+	QDF_STATUS status;
 
 	vdev_id = wlan_vdev_get_id(confirm->vdev);
 	psoc = wlan_vdev_get_psoc(confirm->vdev);
@@ -559,17 +538,6 @@ static QDF_STATUS nan_handle_confirm(struct nan_datapath_confirm_event *confirm)
 		nan_err("psoc is null");
 		return QDF_STATUS_E_NULL_VALUE;
 	}
-
-	peer = wlan_objmgr_get_peer_by_mac(psoc,
-					   confirm->peer_ndi_mac_addr.bytes,
-					   WLAN_NAN_ID);
-	if (!peer && confirm->rsp_code == NAN_DATAPATH_RESPONSE_ACCEPT) {
-		nan_debug("Drop NDP confirm as peer isn't available");
-		return QDF_STATUS_E_NULL_VALUE;
-	}
-
-	if (peer)
-		wlan_objmgr_peer_release_ref(peer, WLAN_NAN_ID);
 
 	psoc_nan_obj = nan_get_psoc_priv_obj(psoc);
 	if (!psoc_nan_obj) {
@@ -616,9 +584,34 @@ static QDF_STATUS nan_handle_confirm(struct nan_datapath_confirm_event *confirm)
 
 		psoc_nan_obj->cb_obj.update_ndi_conn(vdev_id, &confirm->ch[0]);
 
-		if (NAN_CONCURRENCY_SUPPORTED(psoc)) {
-			ndi_update_policy_mgr_conn_table(confirm, psoc,
-							 vdev_id);
+		if (psoc_nan_obj->nan_caps.ndi_dbs_supported) {
+			channel = wlan_freq_to_chan(confirm->ch[0].freq);
+			status = policy_mgr_reset_connection_update(psoc);
+			if (!QDF_IS_STATUS_SUCCESS(status)) {
+				nan_err("Policy mgr reset connection failed-%d",
+					status);
+				return status;
+			}
+
+			status = policy_mgr_current_connections_update(
+				psoc, vdev_id, wlan_chan_to_freq(channel),
+				POLICY_MGR_UPDATE_REASON_NDP_UPDATE);
+			if (QDF_STATUS_E_FAILURE == status) {
+				nan_err("connections update failed!!");
+				return status;
+			}
+
+			if (QDF_STATUS_SUCCESS == status) {
+				status = policy_mgr_wait_for_connection_update(
+									  psoc);
+				if (!QDF_IS_STATUS_SUCCESS(status)) {
+					nan_err("qdf wait for event failed!!");
+					return status;
+				}
+			}
+
+			policy_mgr_incr_active_session(psoc, QDF_NDI_MODE,
+						       vdev_id);
 			vdev_nan_obj->ndp_init_done = true;
 		}
 	}
@@ -756,7 +749,7 @@ static QDF_STATUS nan_handle_ndp_end_rsp(
 
 	/* Unblock the wait here if NDP_END request is a failure */
 	if (rsp->status != 0) {
-		request = osif_request_get(psoc_nan_obj->ndp_request_ctx);
+		request = osif_request_get(psoc_nan_obj->request_context);
 		if (request) {
 			osif_request_complete(request);
 			osif_request_put(request);
@@ -824,7 +817,7 @@ static QDF_STATUS nan_handle_end_ind(
 						     NDP_END_IND, ind);
 
 	/* Unblock the NDP_END wait */
-	request = osif_request_get(psoc_nan_obj->ndp_request_ctx);
+	request = osif_request_get(psoc_nan_obj->request_context);
 	if (request) {
 		osif_request_complete(request);
 		osif_request_put(request);
@@ -840,7 +833,6 @@ static QDF_STATUS nan_handle_enable_rsp(struct nan_event_params *nan_event)
 	QDF_STATUS status;
 	void (*call_back)(void *cookie);
 	uint8_t vdev_id;
-	void (*nan_conc_callback)(void);
 
 	psoc = nan_event->psoc;
 	psoc_nan_obj = nan_get_psoc_priv_obj(psoc);
@@ -885,23 +877,12 @@ fail:
 	psoc_nan_obj->nan_social_ch_2g_freq = 0;
 	psoc_nan_obj->nan_social_ch_5g_freq = 0;
 	nan_set_discovery_state(psoc, NAN_DISC_DISABLED);
-	if (ucfg_is_nan_dbs_supported(psoc))
-		policy_mgr_check_n_start_opportunistic_timer(psoc);
-
-	/*
-	 * If FW respond with NAN enable failure, then TDLS should be enable
-	 * again if there is TDLS connection exist earlier.
-	 * decrement the active TDLS session.
-	 */
-	ucfg_tdls_notify_connect_failure(psoc);
+	policy_mgr_check_n_start_opportunistic_timer(psoc);
 
 done:
-	nan_conc_callback = psoc_nan_obj->cb_obj.nan_concurrency_update;
-	if (nan_conc_callback)
-		nan_conc_callback();
 	call_back = psoc_nan_obj->cb_obj.ucfg_nan_request_process_cb;
 	if (call_back)
-		call_back(psoc_nan_obj->nan_disc_request_ctx);
+		call_back(psoc_nan_obj->request_context);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -911,7 +892,6 @@ QDF_STATUS nan_disable_cleanup(struct wlan_objmgr_psoc *psoc)
 	struct nan_psoc_priv_obj *psoc_nan_obj;
 	QDF_STATUS status;
 	uint8_t vdev_id;
-	void (*nan_conc_callback)(void);
 
 	if (!psoc) {
 		nan_err("psoc is NULL");
@@ -935,7 +915,7 @@ QDF_STATUS nan_disable_cleanup(struct wlan_objmgr_psoc *psoc)
 		policy_mgr_decr_session_set_pcl(psoc, QDF_NAN_DISC_MODE,
 						vdev_id);
 		if (psoc_nan_obj->is_explicit_disable && call_back)
-			call_back(psoc_nan_obj->nan_disc_request_ctx);
+			call_back(psoc_nan_obj->request_context);
 
 		policy_mgr_nan_sap_post_disable_conc_check(psoc);
 	} else {
@@ -943,9 +923,6 @@ QDF_STATUS nan_disable_cleanup(struct wlan_objmgr_psoc *psoc)
 		nan_err("Cannot set NAN state to disabled!");
 		return QDF_STATUS_E_FAILURE;
 	}
-	nan_conc_callback = psoc_nan_obj->cb_obj.nan_concurrency_update;
-	if (nan_conc_callback)
-		nan_conc_callback();
 
 	return status;
 }
@@ -1136,13 +1113,20 @@ bool nan_is_disc_active(struct wlan_objmgr_psoc *psoc)
 		NAN_DISC_ENABLE_IN_PROGRESS == nan_get_discovery_state(psoc));
 }
 
-static QDF_STATUS nan_set_hw_mode(struct wlan_objmgr_psoc *psoc,
-				  uint32_t nan_ch_freq)
+QDF_STATUS nan_discovery_pre_enable(struct wlan_objmgr_psoc *psoc,
+				    uint32_t nan_ch_freq)
 {
 	QDF_STATUS status = QDF_STATUS_E_INVAL;
 	struct wlan_objmgr_pdev *pdev = NULL;
 	struct wlan_objmgr_vdev *vdev = NULL;
 	uint8_t vdev_id;
+
+	status = nan_set_discovery_state(psoc, NAN_DISC_ENABLE_IN_PROGRESS);
+
+	if (QDF_IS_STATUS_ERROR(status)) {
+		nan_err("Unable to set NAN Disc State to ENABLE_IN_PROGRESS");
+		goto pre_enable_failure;
+	}
 
 	policy_mgr_stop_opportunistic_timer(psoc);
 
@@ -1157,6 +1141,13 @@ static QDF_STATUS nan_set_hw_mode(struct wlan_objmgr_psoc *psoc,
 	pdev = wlan_objmgr_get_pdev_by_id(psoc, 0, WLAN_NAN_ID);
 	if (!pdev) {
 		nan_err("null pdev");
+		status = QDF_STATUS_E_INVAL;
+		goto pre_enable_failure;
+	}
+
+	if (!policy_mgr_nan_sap_pre_enable_conc_check(psoc, PM_NAN_DISC_MODE,
+						      nan_ch_freq)) {
+		nan_debug("NAN not enabled due to concurrency constraints");
 		status = QDF_STATUS_E_INVAL;
 		goto pre_enable_failure;
 	}
@@ -1179,46 +1170,15 @@ static QDF_STATUS nan_set_hw_mode(struct wlan_objmgr_psoc *psoc,
 		goto pre_enable_failure;
 	}
 
-pre_enable_failure:
-	if (pdev)
-		wlan_objmgr_pdev_release_ref(pdev, WLAN_NAN_ID);
-
-	return status;
-}
-
-QDF_STATUS nan_discovery_pre_enable(struct wlan_objmgr_psoc *psoc,
-				    uint32_t nan_ch_freq)
-{
-	QDF_STATUS status = QDF_STATUS_E_INVAL;
-
-	status = nan_set_discovery_state(psoc, NAN_DISC_ENABLE_IN_PROGRESS);
-
-	if (QDF_IS_STATUS_ERROR(status)) {
-		nan_err("Unable to set NAN Disc State to ENABLE_IN_PROGRESS");
-		goto pre_enable_failure;
-	}
-
-	if (policy_mgr_mode_specific_connection_count(psoc, PM_SAP_MODE,
-						      NULL) &&
-	    !policy_mgr_nan_sap_pre_enable_conc_check(psoc, PM_NAN_DISC_MODE,
-						      nan_ch_freq)) {
-		nan_debug("NAN not enabled due to concurrency constraints");
-		status = QDF_STATUS_E_INVAL;
-		goto pre_enable_failure;
-	}
-
-	if (policy_mgr_is_hw_dbs_capable(psoc)) {
-		status = nan_set_hw_mode(psoc, nan_ch_freq);
-		if (QDF_IS_STATUS_ERROR(status))
-			goto pre_enable_failure;
-	}
-
 	/* Try to teardown TDLS links, but do not wait */
 	status = ucfg_tdls_teardown_links(psoc);
 	if (QDF_IS_STATUS_ERROR(status))
 		nan_err("Failed to teardown TDLS links");
 
 pre_enable_failure:
+	if (pdev)
+		wlan_objmgr_pdev_release_ref(pdev, WLAN_NAN_ID);
+
 	if (QDF_IS_STATUS_ERROR(status))
 		nan_set_discovery_state(psoc, NAN_DISC_DISABLED);
 
@@ -1307,13 +1267,13 @@ static QDF_STATUS nan_discovery_generic_req(struct nan_generic_req *req)
 	return tx_ops->nan_discovery_req_tx(req, NAN_GENERIC_REQ);
 }
 
-QDF_STATUS nan_discovery_flush_callback(struct scheduler_msg *msg)
+void nan_discovery_flush_callback(struct scheduler_msg *msg)
 {
 	struct wlan_objmgr_psoc *psoc;
 
 	if (!msg || !msg->bodyptr) {
 		nan_err("Null pointer for NAN Discovery message");
-		return QDF_STATUS_E_INVAL;
+		return;
 	}
 
 	switch (msg->type) {
@@ -1329,13 +1289,11 @@ QDF_STATUS nan_discovery_flush_callback(struct scheduler_msg *msg)
 	default:
 		nan_err("Unsupported request type: %d", msg->type);
 		qdf_mem_free(msg->bodyptr);
-		return QDF_STATUS_E_INVAL;
+		return;
 	}
 
 	wlan_objmgr_psoc_release_ref(psoc, WLAN_NAN_ID);
 	qdf_mem_free(msg->bodyptr);
-
-	return QDF_STATUS_SUCCESS;
 }
 
 QDF_STATUS nan_discovery_scheduled_handler(struct scheduler_msg *msg)
@@ -1425,10 +1383,6 @@ bool wlan_nan_get_sap_conc_support(struct wlan_objmgr_psoc *psoc)
 	}
 
 	return (psoc_nan_obj->nan_caps.nan_sap_supported &&
-		ucfg_is_nan_conc_control_supported(psoc));
-}
-
-bool wlan_nan_is_beamforming_supported(struct wlan_objmgr_psoc *psoc)
-{
-	return ucfg_nan_is_beamforming_supported(psoc);
+		psoc_nan_obj->nan_caps.nan_dbs_supported &&
+		psoc_nan_obj->nan_caps.nan_disable_supported);
 }

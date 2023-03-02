@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -65,6 +64,10 @@ static void lim_delete_sta_util(struct mac_context *mac_ctx, tpDeleteStaContext 
 
 	pe_debug("Deleting station: reasonCode: %d", msg->reasonCode);
 
+	if (LIM_IS_IBSS_ROLE(session_entry)) {
+		return;
+	}
+
 	stads = dph_lookup_hash_entry(mac_ctx, msg->addr2, &msg->assocId,
 				      &session_entry->dph.dphHashTable);
 
@@ -94,7 +97,7 @@ static void lim_delete_sta_util(struct mac_context *mac_ctx, tpDeleteStaContext 
 			return;
 		} else {
 			lim_send_disassoc_mgmt_frame(mac_ctx,
-				REASON_DISASSOC_DUE_TO_INACTIVITY,
+				eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON,
 				stads->staAddr, session_entry, false);
 			lim_trigger_sta_deletion(mac_ctx, stads, session_entry);
 		}
@@ -108,7 +111,8 @@ static void lim_delete_sta_util(struct mac_context *mac_ctx, tpDeleteStaContext 
 			 * eSIR_MAC_TDLS_TEARDOWN_PEER_UNREACHABLE
 			 */
 			lim_send_sme_tdls_del_sta_ind(mac_ctx, stads,
-			    session_entry, REASON_TDLS_PEER_UNREACHABLE);
+			    session_entry,
+			    eSIR_MAC_TDLS_TEARDOWN_PEER_UNREACHABLE);
 		} else {
 #endif
 		/* TearDownLink with AP */
@@ -138,7 +142,7 @@ static void lim_delete_sta_util(struct mac_context *mac_ctx, tpDeleteStaContext 
 		}
 
 		stads->mlmStaContext.disassocReason =
-			REASON_DISASSOC_DUE_TO_INACTIVITY;
+			eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON;
 		stads->mlmStaContext.cleanupTrigger =
 			eLIM_LINK_MONITORING_DEAUTH;
 
@@ -183,7 +187,7 @@ void lim_delete_sta_context(struct mac_context *mac_ctx,
 	tpDeleteStaContext msg = (tpDeleteStaContext) lim_msg->bodyptr;
 	struct pe_session *session_entry;
 	tpDphHashNode sta_ds;
-	enum wlan_reason_code reason_code;
+	enum eSirMacReasonCodes reason_code;
 	struct reject_ap_info ap_info;
 
 	if (!msg) {
@@ -225,16 +229,16 @@ void lim_delete_sta_context(struct mac_context *mac_ctx,
 				return;
 			}
 			lim_send_deauth_mgmt_frame(mac_ctx,
-				REASON_DISASSOC_DUE_TO_INACTIVITY,
+				eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON,
 				msg->addr2, session_entry, false);
 			if (msg->reasonCode ==
 				HAL_DEL_STA_REASON_CODE_SA_QUERY_TIMEOUT)
-				reason_code = REASON_SA_QUERY_TIMEOUT;
+				reason_code = eSIR_MAC_SA_QUERY_TIMEOUT;
 			else if (msg->reasonCode ==
 				HAL_DEL_STA_REASON_CODE_XRETRY)
-				reason_code = REASON_PEER_XRETRY_FAIL;
+				reason_code = eSIR_MAC_PEER_XRETRY_FAIL;
 			else
-				reason_code = REASON_PEER_INACTIVITY;
+				reason_code = eSIR_MAC_PEER_INACTIVITY;
 			lim_tear_down_link_with_ap(mac_ctx,
 						   session_entry->peSessionId,
 						   reason_code,
@@ -257,7 +261,7 @@ void lim_delete_sta_context(struct mac_context *mac_ctx,
 		pe_err("Deleting Unknown station");
 		lim_print_mac_addr(mac_ctx, msg->addr2, LOGE);
 		lim_send_deauth_mgmt_frame(mac_ctx,
-			REASON_CLASS3_FRAME_FROM_NON_ASSOC_STA,
+			eSIR_MAC_CLASS3_FRAME_FROM_NON_ASSOC_STA_REASON,
 			msg->addr2, session_entry, false);
 		break;
 
@@ -271,10 +275,10 @@ void lim_delete_sta_context(struct mac_context *mac_ctx,
 			return;
 		}
 		lim_send_deauth_mgmt_frame(mac_ctx,
-				REASON_DISASSOC_BSS_TRANSITION ,
+				eSIR_MAC_BSS_TRANSITION_DISASSOC,
 				session_entry->bssId, session_entry, false);
 		lim_tear_down_link_with_ap(mac_ctx, session_entry->peSessionId,
-					   REASON_DISASSOC_BSS_TRANSITION ,
+					   eSIR_MAC_BSS_TRANSITION_DISASSOC,
 					   eLIM_LINK_MONITORING_DEAUTH);
 		break;
 
@@ -321,12 +325,12 @@ lim_trigger_sta_deletion(struct mac_context *mac_ctx, tpDphHashNode sta_ds,
 	sta_ds->sta_deletion_in_progress = true;
 
 	sta_ds->mlmStaContext.disassocReason =
-		REASON_DISASSOC_DUE_TO_INACTIVITY;
+		eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON;
 	sta_ds->mlmStaContext.cleanupTrigger = eLIM_LINK_MONITORING_DISASSOC;
 	qdf_mem_copy(&mlm_disassoc_ind.peerMacAddr, sta_ds->staAddr,
 		sizeof(tSirMacAddr));
 	mlm_disassoc_ind.reasonCode =
-		REASON_DISASSOC_DUE_TO_INACTIVITY;
+		eSIR_MAC_DISASSOC_DUE_TO_INACTIVITY_REASON;
 	mlm_disassoc_ind.disassocTrigger = eLIM_LINK_MONITORING_DISASSOC;
 
 	/* Update PE session Id */
@@ -344,7 +348,7 @@ lim_trigger_sta_deletion(struct mac_context *mac_ctx, tpDphHashNode sta_ds,
 
 void
 lim_tear_down_link_with_ap(struct mac_context *mac, uint8_t sessionId,
-			   enum wlan_reason_code reasonCode,
+			   tSirMacReasonCodes reasonCode,
 			   enum eLimDisassocTrigger trigger)
 {
 	tpDphHashNode sta = NULL;
@@ -379,7 +383,7 @@ lim_tear_down_link_with_ap(struct mac_context *mac, uint8_t sessionId,
 		tLimMlmDeauthInd mlmDeauthInd;
 
 		if ((sta->mlmStaContext.disassocReason ==
-		    REASON_DEAUTH_NETWORK_LEAVING) ||
+		    eSIR_MAC_DEAUTH_LEAVING_BSS_REASON) ||
 		    (sta->mlmStaContext.cleanupTrigger ==
 		    eLIM_HOST_DEAUTH)) {
 			pe_err("Host already issued deauth, do nothing");
@@ -404,7 +408,7 @@ lim_tear_down_link_with_ap(struct mac_context *mac, uint8_t sessionId,
 		 * connection, if we connect to same AP after HB failure.
 		 */
 		if (mac->mlme_cfg->sta.deauth_before_connection &&
-		    reasonCode == REASON_BEACON_MISSED) {
+		    eSIR_MAC_BEACON_MISSED == reasonCode) {
 			int apCount = mac->lim.gLimHeartBeatApMacIndex;
 
 			if (mac->lim.gLimHeartBeatApMacIndex)
@@ -453,6 +457,9 @@ lim_tear_down_link_with_ap(struct mac_context *mac, uint8_t sessionId,
 void lim_handle_heart_beat_failure(struct mac_context *mac_ctx,
 				   struct pe_session *session)
 {
+	uint8_t curr_chan;
+	tpSirAddie scan_ie = NULL;
+
 #ifdef FEATURE_WLAN_DIAG_SUPPORT_LIM    /* FEATURE_WLAN_DIAG_SUPPORT */
 	host_log_beacon_update_pkt_type *log_ptr = NULL;
 #endif /* FEATURE_WLAN_DIAG_SUPPORT */
@@ -488,19 +495,50 @@ void lim_handle_heart_beat_failure(struct mac_context *mac_ctx,
 		mac_ctx->lim.gLimHBfailureCntInLinkEstState++;
 
 		/*
-		 * Before host received beacon miss, firmware has checked link
-		 * by sending QoS NULL data, don't need host send probe req.
-		 * Some IoT AP can send probe response, but can't send beacon
-		 * sometimes, need disconnect too, or firmware will assert.
+		 * Check if connected on the DFS channel, if not connected on
+		 * DFS channel then only send the probe request otherwise tear
+		 * down the link
 		 */
-		lim_send_deauth_mgmt_frame(mac_ctx,
-					   REASON_DISASSOC_DUE_TO_INACTIVITY,
-					   session->bssId,
-					   session, false);
-		lim_tear_down_link_with_ap(mac_ctx,
-					   session->peSessionId,
-					   REASON_BEACON_MISSED,
-					   eLIM_LINK_MONITORING_DEAUTH);
+		curr_chan = wlan_reg_freq_to_chan(
+					mac_ctx->pdev, session->curr_op_freq);
+		if (!lim_isconnected_on_dfs_channel(mac_ctx, curr_chan)) {
+			/* Detected continuous Beacon Misses */
+			session->LimHBFailureStatus = true;
+
+			/*Reset the HB packet count before sending probe*/
+			limResetHBPktCount(session);
+			/**
+			 * Send Probe Request frame to AP to see if
+			 * it is still around. Wait until certain
+			 * timeout for Probe Response from AP.
+			 */
+			pe_debug("HB missed from AP. Sending Probe Req");
+			/* for searching AP, we don't include any more IE */
+			if (session->lim_join_req) {
+				scan_ie = &session->lim_join_req->addIEScan;
+				lim_send_probe_req_mgmt_frame(mac_ctx,
+					&session->ssId,
+					session->bssId, session->curr_op_freq,
+					session->self_mac_addr,
+					session->dot11mode,
+					&scan_ie->length, scan_ie->addIEdata);
+			} else {
+				lim_send_probe_req_mgmt_frame(mac_ctx,
+					&session->ssId,
+					session->bssId, session->curr_op_freq,
+					session->self_mac_addr,
+					session->dot11mode, NULL, NULL);
+			}
+		} else {
+			/*
+			 * Connected on DFS channel so should not send the
+			 * probe request tear down the link directly
+			 */
+			lim_tear_down_link_with_ap(mac_ctx,
+				session->peSessionId,
+				eSIR_MAC_BEACON_MISSED,
+				eLIM_LINK_MONITORING_DEAUTH);
+		}
 	} else {
 		/**
 		 * Heartbeat timer may have timed out
@@ -528,7 +566,8 @@ void lim_rx_invalid_peer_process(struct mac_context *mac_ctx,
 	struct ol_rx_inv_peer_params *msg =
 			(struct ol_rx_inv_peer_params *)lim_msg->bodyptr;
 	struct pe_session *session_entry;
-	uint16_t reason_code = REASON_CLASS3_FRAME_FROM_NON_ASSOC_STA;
+	uint16_t reason_code =
+		eSIR_MAC_CLASS3_FRAME_FROM_NON_ASSOC_STA_REASON;
 
 	if (!msg) {
 		pe_err("Invalid body pointer in message");

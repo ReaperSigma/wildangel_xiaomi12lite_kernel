@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -58,7 +58,6 @@
  */
 #define TDLS_DISCOVERY_TIMEOUT_BEFORE_UPDATE     1000
 #define TDLS_SCAN_REJECT_MAX            5
-#define TDLS_MAX_CONNECTED_PEERS_TO_ALLOW_SCAN   1
 
 #define tdls_debug(params...) \
 	QDF_TRACE_DEBUG(QDF_MODULE_ID_TDLS, params)
@@ -191,7 +190,6 @@ struct tdls_set_state_info {
  * @runtime_lock: runtime lock
  * @tdls_osif_init_cb: Callback to initialize the tdls private
  * @tdls_osif_deinit_cb: Callback to deinitialize the tdls private
- * @fw_tdls_11ax_capablity: bool for tdls 11ax fw capability
  */
 struct tdls_soc_priv_obj {
 	struct wlan_objmgr_psoc *soc;
@@ -240,9 +238,6 @@ struct tdls_soc_priv_obj {
 #endif
 	tdls_vdev_init_cb tdls_osif_init_cb;
 	tdls_vdev_deinit_cb tdls_osif_deinit_cb;
-#ifdef WLAN_FEATURE_11AX
-	bool fw_tdls_11ax_capability;
-#endif
 };
 
 /**
@@ -259,7 +254,6 @@ struct tdls_soc_priv_obj {
  * @valid_mac_entries: number of valid mac entry in @ct_peer_mac_table
  * @magic: magic
  * @tx_queue: tx frame queue
- * @tdls_teardown_comp: tdls teardown completion
  */
 struct tdls_vdev_priv_obj {
 	struct wlan_objmgr_vdev *vdev;
@@ -276,7 +270,6 @@ struct tdls_vdev_priv_obj {
 	uint32_t magic;
 	uint8_t session_id;
 	qdf_list_t tx_queue;
-	qdf_event_t tdls_teardown_comp;
 };
 
 /**
@@ -735,8 +728,7 @@ void tdls_scan_done_callback(struct tdls_soc_priv_obj *tdls_soc);
  *         1 = caller can continue to scan
  */
 void tdls_scan_serialization_comp_info_cb(struct wlan_objmgr_vdev *vdev,
-		union wlan_serialization_rules_info *comp_info,
-		struct wlan_serialization_command *cmd);
+		union wlan_serialization_rules_info *comp_info);
 
 /**
  * tdls_set_offchan_mode() - update tdls status info

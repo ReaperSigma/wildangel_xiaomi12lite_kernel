@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -41,8 +40,10 @@ static QDF_STATUS nan_psoc_obj_created_notification(
 
 	nan_debug("nan_psoc_create_notif called");
 	nan_obj = qdf_mem_malloc(sizeof(*nan_obj));
-	if (!nan_obj)
+	if (!nan_obj) {
+		nan_alert("malloc failed for nan prv obj");
 		return QDF_STATUS_E_NOMEM;
+	}
 
 	qdf_spinlock_create(&nan_obj->lock);
 	status = wlan_objmgr_psoc_component_obj_attach(psoc, WLAN_UMAC_COMP_NAN,
@@ -113,8 +114,10 @@ static QDF_STATUS nan_vdev_obj_created_notification(
 	}
 
 	nan_obj = qdf_mem_malloc(sizeof(*nan_obj));
-	if (!nan_obj)
+	if (!nan_obj) {
+		nan_err("malloc failed for nan prv obj");
 		return QDF_STATUS_E_NOMEM;
+	}
 
 	qdf_spinlock_create(&nan_obj->lock);
 	status = wlan_objmgr_vdev_component_obj_attach(vdev, WLAN_UMAC_COMP_NAN,
@@ -182,8 +185,10 @@ static QDF_STATUS nan_peer_obj_created_notification(
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
 	nan_peer_obj = qdf_mem_malloc(sizeof(*nan_peer_obj));
-	if (!nan_peer_obj)
+	if (!nan_peer_obj) {
+		nan_err("malloc failed for nan prv obj");
 		return QDF_STATUS_E_NOMEM;
+	}
 
 	qdf_spinlock_create(&nan_peer_obj->lock);
 	status = wlan_objmgr_peer_component_obj_attach(peer, WLAN_UMAC_COMP_NAN,
@@ -411,35 +416,9 @@ QDF_STATUS nan_psoc_disable(struct wlan_objmgr_psoc *psoc)
 	return QDF_STATUS_SUCCESS;
 }
 
-static bool
-wlan_is_nan_allowed_on_6ghz_freq(struct wlan_objmgr_pdev *pdev, uint32_t freq)
-{
-	QDF_STATUS status;
-	struct regulatory_channel chan_list[NUM_6GHZ_CHANNELS];
-	uint16_t i;
-
-	status = wlan_reg_get_6g_ap_master_chan_list(pdev,
-						     REG_VERY_LOW_POWER_AP,
-						     chan_list);
-
-	for (i = 0; i < NUM_6GHZ_CHANNELS; i++) {
-		if ((freq == chan_list[i].center_freq) &&
-		    (chan_list[i].state == CHANNEL_STATE_ENABLE))
-			return true;
-	}
-
-	return false;
-}
-
 bool wlan_is_nan_allowed_on_freq(struct wlan_objmgr_pdev *pdev, uint32_t freq)
 {
 	bool nan_allowed = true;
-
-	/* Check for 6GHz channels */
-	if (wlan_reg_is_6ghz_chan_freq(freq)) {
-		nan_allowed = wlan_is_nan_allowed_on_6ghz_freq(pdev, freq);
-		return nan_allowed;
-	}
 
 	/* Check for SRD channels */
 	if (wlan_reg_is_etsi13_srd_chan_for_freq(pdev, freq))

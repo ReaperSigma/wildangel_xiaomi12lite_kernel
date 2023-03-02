@@ -380,8 +380,7 @@ bool (*htt_rx_mpdu_desc_retry)(
  * @return the LSBs of the sequence number for the MPDU
  */
 extern uint16_t
-(*htt_rx_mpdu_desc_seq_num)(htt_pdev_handle pdev, void *mpdu_desc,
-			    bool update_seq_num);
+(*htt_rx_mpdu_desc_seq_num)(htt_pdev_handle pdev, void *mpdu_desc);
 
 /**
  * @brief Return a rx MPDU's rx reorder array index, based on sequence number.
@@ -1001,7 +1000,6 @@ htt_rx_offload_paddr_msdu_pop_ll(htt_pdev_handle pdev,
 
 uint32_t htt_rx_amsdu_rx_in_order_get_pktlog(qdf_nbuf_t rx_ind_msg);
 
-#ifndef REMOVE_PKT_LOG
 /**
  * htt_rx_update_smmu_map() - set smmu map/unmap for rx buffers
  * @pdev: htt pdev handle
@@ -1010,12 +1008,6 @@ uint32_t htt_rx_amsdu_rx_in_order_get_pktlog(qdf_nbuf_t rx_ind_msg);
  * Return: QDF_STATUS
  */
 QDF_STATUS htt_rx_update_smmu_map(struct htt_pdev_t *pdev, bool map);
-#else
-static inline QDF_STATUS htt_rx_update_smmu_map(struct htt_pdev_t *pdev, bool map)
-{
-	return QDF_STATUS_SUCCESS;
-}
-#endif
 
 /** htt_tx_enable_ppdu_end
  * @enable_ppdu_end - set it to 1 if WLAN_FEATURE_TSF_PLUS is defined,

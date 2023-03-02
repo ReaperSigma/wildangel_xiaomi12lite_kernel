@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2012-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -32,17 +31,6 @@
 #define CFG_PMF_SA_QUERY_RETRY_INTERVAL_TYPE	CFG_UINT
 #endif /*WLAN_FEATURE_11W*/
 
-/**
- * enum monitor_mode_concurrency - Monitor mode concurrency
- * @MONITOR_MODE_CONC_NO_SUPPORT: No concurrency supported with monitor mode
- * @MONITOR_MODE_CONC_STA_SCAN_MON: STA + monitor mode concurrency is supported
- */
-enum monitor_mode_concurrency {
-	MONITOR_MODE_CONC_NO_SUPPORT,
-	MONITOR_MODE_CONC_STA_SCAN_MON,
-	MONITOR_MODE_CONC_AFTER_LAST,
-	MONITOR_MODE_CONC_MAX = MONITOR_MODE_CONC_AFTER_LAST - 1,
-};
 /*
  * pmfSaQueryMaxRetries - Control PMF SA query retries for SAP
  * @Min: 0
@@ -119,7 +107,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: STA
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -141,7 +129,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: STA
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -151,25 +139,8 @@ enum monitor_mode_concurrency {
 		"11d Enable Flag")
 
 /*
- * rf_test_mode_enabled - Enable rf test mode support
- * @Min: 0
- * @Max: 1
- * @Default: 1
- *
- * This cfg is used to set rf test mode support flag
- *
- * Related: None
- *
- * Supported Feature: STA
- */
-#define CFG_RF_TEST_MODE_SUPP_ENABLED CFG_BOOL( \
-		"rf_test_mode_enabled", \
-		1, \
-		"rf test mode Enable Flag")
-
-/*
  * <ini>
- * BandCapability - Preferred band (0: 2.4G, 5G, and 6G,
+ * BandCapability - Preferred band (0: Both 2.4G and 5G,
  *				    1: 2.4G only,
  *				    2: 5G only,
  *				    3: Both 2.4G and 5G,
@@ -189,7 +160,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: STA
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -295,7 +266,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: 802.11b, 2x2
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -319,7 +290,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: General
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -340,7 +311,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: General
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -368,7 +339,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: General
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -389,7 +360,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: General
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -410,7 +381,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: General
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -435,7 +406,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: 5/10 Mhz channel width support
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -459,7 +430,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: General
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -484,7 +455,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: SSR
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -581,7 +552,7 @@ enum monitor_mode_concurrency {
  *
  * Supported Feature: STA
  *
- * Usage: External
+ * Usage: Internal/External
  *
  * </ini>
  */
@@ -621,12 +592,7 @@ enum monitor_mode_concurrency {
  * @Max: 1
  * @Default: 0
  *
- * This ini is used to enable/disable the removal of time stamp sync cmd.
- * If we disable this periodic time sync update to firmware then roaming
- * timestamp updates to kmsg will have invalid timestamp as firmware will
- * use this timestamp to capture when roaming has happened with respect
- * to host timestamp.
- *
+ * This ini is used to enable/disable the removal of time stamp sync cmd
  *
  * Usage: External
  *
@@ -641,16 +607,11 @@ enum monitor_mode_concurrency {
  * <ini>
  * disable_4way_hs_offload - Enable/Disable 4 way handshake offload to firmware
  * @Min: 0
- * @Max: 0x2
- * @Default: 0x2
+ * @Max: 1
+ * @Default: 0
  *
- * 0x0 - 4-way HS to be handled in firmware for the AKMs except for SAE and
- * OWE roaming the 4way HS is handled in supplicant by default
- * 0x1 - 4-way HS to be handled in supplicant
- * 0x2 - 4-way HS to be handled in firmware for the AKMs including the SAE
- * Roam except for OWE roaming the 4way HS is handled in supplicant
- *
- * Based on the requirement the Max value can be increased per AKM.
+ * 0  4-way HS to be handled in firmware
+ * 1  4-way HS to be handled in supplicant
  *
  * Related: None
  *
@@ -660,13 +621,9 @@ enum monitor_mode_concurrency {
  *
  * </ini>
  */
-#define CFG_DISABLE_4WAY_HS_OFFLOAD CFG_INI_UINT( \
-		"disable_4way_hs_offload", \
-		0, \
-		0x2, \
-		0x2, \
-		CFG_VALUE_OR_DEFAULT, \
-		"Enable/disable 4 way handshake offload to firmware")
+#define CFG_DISABLE_4WAY_HS_OFFLOAD CFG_INI_BOOL("disable_4way_hs_offload", \
+						 0, \
+						 "Enable/disable 4 way handshake offload to firmware")
 
 /*
  * <ini>
@@ -740,41 +697,17 @@ enum monitor_mode_concurrency {
 
 /*
  * <ini>
- * dfs_chan_ageout_time - Set DFS Channel ageout time(in seconds)
- * @Min: 0
- * @Max: 8
- * Default: 0
- *
- * Ageout time is the time upto which DFS channel information such as beacon
- * found is remembered. So that Firmware performs Active scan instead of the
- * Passive to reduce the Dwell time.
- * This ini Parameter used to set ageout timer value from host to FW.
- * If not set, Firmware will disable ageout time.
- *
- * Supported Feature: STA scan in DFS channels
- *
- * Usage: External
- *
- * </ini>
- */
-#define CFG_DFS_CHAN_AGEOUT_TIME CFG_INI_UINT("dfs_chan_ageout_time", \
-			0, 8, 0, CFG_VALUE_OR_DEFAULT, \
-			"Set DFS Channel ageout time from host to firmware")
-
-/*
- * <ini>
  * sae_connect_retries - Bit mask to retry Auth and full connection on assoc
  * timeout to same AP and auth retries during roaming
  * @Min: 0x0
  * @Max: 0x53
- * @Default: 0x52
+ * @Default: 0x49
  *
  * This ini is used to set max auth retry in auth phase of roaming and initial
  * connection and max connection retry in case of assoc timeout. MAX Auth
  * retries are capped to 3, connection retries are capped to 2 and roam Auth
  * retry is capped to 1.
- * Default is 0x52 i.e. 1 roam auth retry, 2 auth retry and 2 full connection
- * retry.
+ * Default is 0x49 i.e. 1 retry each.
  *
  * Bits       Retry Type
  * BIT[0:2]   AUTH retries
@@ -802,116 +735,8 @@ enum monitor_mode_concurrency {
  * </ini>
  */
 #define CFG_SAE_CONNECION_RETRIES CFG_INI_UINT("sae_connect_retries", \
-				0, 0x53, 0x52, CFG_VALUE_OR_DEFAULT, \
+				0, 0x53, 0x49, CFG_VALUE_OR_DEFAULT, \
 				"Bit mask to retry Auth and full connection on assoc timeout to same AP for SAE connection")
-
-/*
- * <ini>
- *
- * wls_6ghz_capable - WiFi Location Service(WLS) is 6Ghz capable
- * @Min: 0 (WLS 6Ghz non-capable)
- * @Max: 1 (WLS 6Ghz capable)
- * @Default: 0 (WLS 6Ghz non-capable)
- *
- * Related: None
- *
- * Supported Feature: General
- *
- * Usage: Internal
- *
- * </ini>
- */
-#define CFG_WLS_6GHZ_CAPABLE CFG_INI_BOOL( \
-	"wls_6ghz_capable", \
-	0, \
-	"WiFi Location Service(WLS) is 6Ghz capable or not")
-
-/*
- * <ini>
- *
- * monitor_mode_conc - Monitor mode concurrency supported
- * @Min: 0
- * @Max: 1
- * @Default: 0
- *
- * Related: None
- *
- * Monitor mode concurrency supported
- * 0 - No concurrency supported
- * 1 - Allow STA scan + Monitor mode concurrency
- *
- * Supported Feature: General
- *
- * Usage: External
- *
- * </ini>
- */
-#define CFG_MONITOR_MODE_CONCURRENCY CFG_INI_UINT( \
-	"monitor_mode_concurrency", \
-	MONITOR_MODE_CONC_NO_SUPPORT, \
-	MONITOR_MODE_CONC_MAX, \
-	MONITOR_MODE_CONC_NO_SUPPORT, \
-	CFG_VALUE_OR_DEFAULT, \
-	"Monitor mode concurrency supported")
-
-/*
- * <ini>
- * tx_retry_multiplier - TX retry multiplier
- * @Min: 0
- * @Max: 500
- * @Default: 0
- *
- * This ini is used to indicate percentage to max retry limit to fw
- * which can further be used by fw to multiply counter by
- * tx_retry_multiplier percent.
- *
- * Supported Feature: STA/SAP
- *
- * Usage: External
- *
- * </ini>
- */
-#define CFG_TX_RETRY_MULTIPLIER CFG_INI_UINT( \
-	"tx_retry_multiplier", \
-	0, \
-	500, \
-	0, \
-	CFG_VALUE_OR_DEFAULT, \
-	"percentage of max retry limit")
-
-/*
- * <ini>
- * mgmt_frame_hw_tx_retry_count - Set hw tx retry count for mgmt action
- * frame
- * @Min: N/A
- * @Max: N/A
- * @Default: N/A
- *
- * Set mgmt action frame hw tx retry count, string format looks like below:
- * frame_hw_tx_retry_count="<frame type>,<retry count>,..."
- * frame type is enum value of mlme_cfg_frame_type.
- * Retry count max value is 127.
- * For example:
- * frame_hw_tx_retry_count="0,64,2,32"
- * The above input string means:
- * For p2p go negotiation request fame, hw retry count 64
- * For p2p provision discovery request, hw retry count 32
- *
- * Related: None.
- *
- * Supported Feature: STA/P2P
- *
- * Usage: External
- *
- * </ini>
- */
-#define MGMT_FRM_HW_TX_RETRY_COUNT_STR_LEN  (64)
-#define CFG_MGMT_FRAME_HW_TX_RETRY_COUNT CFG_INI_STRING( \
-		"mgmt_frame_hw_tx_retry_count", \
-		0, \
-		MGMT_FRM_HW_TX_RETRY_COUNT_STR_LEN, \
-		"", \
-		"Set mgmt action frame hw tx retry count")
 
 #define CFG_GENERIC_ALL \
 	CFG(CFG_ENABLE_DEBUG_PACKET_LOG) \
@@ -941,13 +766,7 @@ enum monitor_mode_concurrency {
 	CFG(CFG_ENABLE_BEACON_RECEPTION_STATS) \
 	CFG(CFG_REMOVE_TIME_STAMP_SYNC_CMD) \
 	CFG(CFG_MGMT_RETRY_MAX) \
-	CFG(CFG_RF_TEST_MODE_SUPP_ENABLED) \
 	CFG(CFG_BMISS_SKIP_FULL_SCAN) \
 	CFG(CFG_ENABLE_RING_BUFFER) \
-	CFG(CFG_DFS_CHAN_AGEOUT_TIME) \
-	CFG(CFG_SAE_CONNECION_RETRIES) \
-	CFG(CFG_WLS_6GHZ_CAPABLE) \
-	CFG(CFG_MONITOR_MODE_CONCURRENCY)\
-	CFG(CFG_TX_RETRY_MULTIPLIER) \
-	CFG(CFG_MGMT_FRAME_HW_TX_RETRY_COUNT)
+	CFG(CFG_SAE_CONNECION_RETRIES)
 #endif /* __CFG_MLME_GENERIC_H */

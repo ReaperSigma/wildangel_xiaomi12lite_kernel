@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2015-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -42,18 +41,20 @@
 #define PARAM_IPV4_ADDR QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_IPV4_ADDR
 #define PARAM_IPV6_ADDR QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_IPV6_ADDR
 
-const struct nla_policy subnet_detect_policy[
-			QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_MAX + 1] = {
-		[QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_GW_MAC_ADDR] =
-				VENDOR_NLA_POLICY_MAC_ADDR,
-		[QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_IPV4_ADDR] = {
-				.type = NLA_EXACT_LEN,
+static const struct nla_policy
+	policy[QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_MAX + 1] = {
+		[PARAM_MAC_ADDR] = {
+				.type = NLA_UNSPEC,
+				.len = QDF_MAC_ADDR_SIZE
+		},
+		[PARAM_IPV4_ADDR] = {
+				.type = NLA_UNSPEC,
 				.len = QDF_IPV4_ADDR_SIZE
 		},
-		[QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_IPV6_ADDR] = {
-				.type = NLA_EXACT_LEN,
+		[PARAM_IPV6_ADDR] = {
+				.type = NLA_UNSPEC,
 				.len = QDF_IPV6_ADDR_SIZE
-		},
+		}
 };
 
 /**
@@ -80,11 +81,6 @@ static int __wlan_hdd_cfg80211_set_gateway_params(struct wiphy *wiphy,
 	bool subnet_detection_enabled;
 
 	hdd_enter_dev(dev);
-
-	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
-		hdd_err("Command not allowed in FTM mode");
-		return -EPERM;
-	}
 
 	ret = wlan_hdd_validate_context(hdd_ctx);
 	if (0 != ret)
@@ -118,7 +114,7 @@ static int __wlan_hdd_cfg80211_set_gateway_params(struct wiphy *wiphy,
 	 */
 	if (wlan_cfg80211_nla_parse(tb,
 				    QCA_WLAN_VENDOR_ATTR_GW_PARAM_CONFIG_MAX,
-				    data, data_len, subnet_detect_policy)) {
+				    data, data_len, policy)) {
 		hdd_err("Invalid ATTR list");
 		return -EINVAL;
 	}

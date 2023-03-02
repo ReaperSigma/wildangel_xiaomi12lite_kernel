@@ -33,6 +33,8 @@
 #include "wlan_mlme_public_struct.h"
 #include <lim_api.h>
 
+/* channel Switch Timer in ticks */
+#define LIM_CHANNEL_SWITCH_TIMER_TICKS           1
 /* Lim Quite timer in ticks */
 #define LIM_QUIET_TIMER_TICKS                    100
 /* Lim Quite BSS timer interval in ticks */
@@ -53,6 +55,15 @@
 static bool lim_create_non_ap_timers(struct mac_context *mac)
 {
 	uint32_t cfgValue;
+	/* Create Channel Switch Timer */
+	if (tx_timer_create(mac, &mac->lim.lim_timers.gLimChannelSwitchTimer,
+			    "CHANNEL SWITCH TIMER",
+			    lim_channel_switch_timer_handler, 0,
+			    LIM_CHANNEL_SWITCH_TIMER_TICKS,
+			    0, TX_NO_ACTIVATE) != TX_SUCCESS) {
+		pe_err("failed to create Ch Switch timer");
+		return false;
+	}
 
 	cfgValue = SYS_MS_TO_TICKS(
 			mac->mlme_cfg->timeouts.join_failure_timeout);
@@ -262,6 +273,7 @@ err_timer:
 	tx_timer_delete(&mac->lim.lim_timers.gLimJoinFailureTimer);
 	tx_timer_delete(&mac->lim.lim_timers.gLimPeriodicJoinProbeReqTimer);
 	tx_timer_delete(&mac->lim.lim_timers.g_lim_periodic_auth_retry_timer);
+	tx_timer_delete(&mac->lim.lim_timers.gLimChannelSwitchTimer);
 	tx_timer_delete(&mac->lim.lim_timers.sae_auth_timer);
 
 	if (mac->lim.gLimPreAuthTimerTable.pTable) {
@@ -751,16 +763,11 @@ lim_deactivate_and_change_per_sta_id_timer(struct mac_context *mac, uint32_t tim
 	switch (timerId) {
 	case eLIM_CNF_WAIT_TIMER:
 
-		if (staId >= (mac->lim.maxStation + 1)) {
-			pe_err("Invalid staId = %d ", staId);
-			return;
-		}
-
-		if (tx_timer_deactivate(&mac->lim.lim_timers.gpLimCnfWaitTimer[staId])
-					!= TX_SUCCESS) {
+		if (tx_timer_deactivate
+			    (&mac->lim.lim_timers.gpLimCnfWaitTimer[staId])
+		    != TX_SUCCESS) {
 			pe_err("unable to deactivate CNF wait timer");
 		}
-
 		/* Change timer to reactivate it in future */
 		val = mac->mlme_cfg->sta.wait_cnf_timeout;
 		val = SYS_MS_TO_TICKS(val);
@@ -909,4 +916,18 @@ void lim_cnf_wait_tmer_handler(void *pMacGlobal, uint32_t param)
 	if (status_code != QDF_STATUS_SUCCESS)
 		pe_err("posting to LIM failed, reason: %d", status_code);
 
+}
+
+void lim_channel_switch_timer_handler(void *pMacGlobal, uint32_t param)
+{
+	struct scheduler_msg msg = {0};
+	struct mac_context *mac = (struct mac_context *) pMacGlobal;
+
+	pe_debug("ChannelSwitch Timer expired.  Posting msg to LIM");
+
+	msg.type = SIR_LIM_CHANNEL_SWITCH_TIMEOUT;
+	msg.bodyval = (uint32_t) param;
+	msg.bodyptr = NULL;
+
+	lim_post_msg_api(mac, &msg);
 }

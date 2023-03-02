@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -91,6 +90,7 @@ static void hdd_encrypt_decrypt_msg_cb(void *cookie,
 			qdf_mem_malloc(sizeof(uint8_t) *
 				resp->data_len);
 		if (!context->response.data) {
+			hdd_err("memory allocation failed");
 			context->status = -ENOMEM;
 		} else {
 			qdf_mem_copy(context->response.data,
@@ -146,7 +146,7 @@ nla_put_failure:
 	return -EINVAL;
 }
 
-const struct nla_policy
+static const struct nla_policy
 encrypt_decrypt_policy[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_MAX + 1] = {
 	[QCA_WLAN_VENDOR_ATTR_ENCRYPTION_TEST_NEEDS_DECRYPTION] = {
 		.type = NLA_FLAG},
@@ -319,8 +319,10 @@ hdd_fill_encrypt_decrypt_params(struct disa_encrypt_decrypt_req_params
 			qdf_mem_malloc(sizeof(uint8_t) *
 				encrypt_decrypt_params->data_len);
 
-		if (!encrypt_decrypt_params->data)
+		if (!encrypt_decrypt_params->data) {
+			hdd_err("memory allocation failed");
 			return -ENOMEM;
+		}
 
 		qdf_mem_copy(encrypt_decrypt_params->data,
 			tmp + mac_hdr_len,
@@ -437,11 +439,6 @@ static int __wlan_hdd_cfg80211_encrypt_decrypt_msg(struct wiphy *wiphy,
 	bool is_bmps_enabled;
 
 	hdd_enter_dev(dev);
-
-	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
-		hdd_err("Command not allowed in FTM mode");
-		return -EPERM;
-	}
 
 	ret = wlan_hdd_validate_context(hdd_ctx);
 	if (ret)

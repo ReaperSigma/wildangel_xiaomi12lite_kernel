@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -35,7 +34,7 @@
  * gEnableNanSupport - NAN feature support configuration
  * @Min: 0
  * @Max: 1
- * @Default: 1
+ * @Default: 0
  *
  * When set to 1 NAN feature will be enabled.
  *
@@ -48,7 +47,7 @@
  * </ini>
  */
 #define CFG_NAN_ENABLE CFG_INI_BOOL("gEnableNanSupport", \
-				    1, \
+				    0, \
 				    "Enable NAN Support")
 
 /*
@@ -81,7 +80,7 @@
  *                        data over TCP/UDP network stack.
  * @Min: 0
  * @Max: 1
- * @Default: 1
+ * @Default: 0
  *
  * When set to 1 NAN Datapath feature will be enabled.
  *
@@ -94,7 +93,7 @@
  * </ini>
  */
 #define CFG_NAN_DATAPATH_ENABLE CFG_INI_BOOL("genable_nan_datapath", \
-					     1, \
+					     0, \
 					     "Enable NAN Datapath support")
 
 /*
@@ -169,9 +168,6 @@
 			CFG_VALUE_OR_DEFAULT, \
 			"Keep alive timeout of a peer")
 
-/* MAX NDP sessions supported */
-#define MAX_NDP_SESSIONS 8
-
 /*
  * <ini>
  * ndp_max_sessions - To configure max ndp sessions
@@ -193,7 +189,7 @@
 #define CFG_NDP_MAX_SESSIONS CFG_INI_UINT( \
 			"ndp_max_sessions", \
 			1, \
-			MAX_NDP_SESSIONS, \
+			8, \
 			8, \
 			CFG_VALUE_OR_DEFAULT, \
 			"max ndp sessions host supports")
@@ -249,7 +245,7 @@
  *
  * @Min: 0
  * @Max: 0xFFFF
- * @Default: 0
+ * @Default: 0x1
  *
  * This parameter helps to enable/disable a particular feature config by setting
  * corresponding bit and send to firmware through the VDEV param
@@ -271,34 +267,12 @@
 			"nan_feature_config", \
 			0, \
 			0xFFFF, \
-			0, \
+			1, \
 			CFG_VALUE_OR_DEFAULT, \
 			"Enable the specified NAN features in firmware")
 
-/*
- * <ini>
- * disable_6g_nan - Disable NAN feature support in 6GHz
- * @Min: 0
- * @Max: 1
- * @Default: 0
- *
- * When set to 1 NAN feature will be disabled in 6GHz.
- *
- * Related: None
- *
- * Supported Feature: NAN
- *
- * Usage: External
- *
- * </ini>
- */
-#define CFG_DISABLE_6G_NAN CFG_INI_BOOL("disable_6g_nan", \
-					0, \
-					"Disable NAN Support in 6GHz")
-
 #ifdef WLAN_FEATURE_NAN
 #define CFG_NAN_DISC CFG(CFG_NAN_ENABLE) \
-			CFG(CFG_DISABLE_6G_NAN) \
 			CFG(CFG_NDP_KEEP_ALIVE_PERIOD) \
 			CFG(CFG_SUPPORT_MP0_DISCOVERY)
 #define CFG_NAN_DP      CFG(CFG_NAN_DATAPATH_ENABLE) \

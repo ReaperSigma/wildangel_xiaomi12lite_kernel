@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -95,6 +95,7 @@ static QDF_STATUS p2p_scan_start(struct p2p_roc_context *roc_ctx)
 
 	req = qdf_mem_malloc(sizeof(*req));
 	if (!req) {
+		p2p_err("failed to alloc scan start request");
 		status = QDF_STATUS_E_NOMEM;
 		goto fail;
 	}
@@ -124,14 +125,13 @@ static QDF_STATUS p2p_scan_start(struct p2p_roc_context *roc_ctx)
 		go_num = policy_mgr_mode_specific_connection_count(
 				p2p_soc_obj->soc, PM_P2P_GO_MODE, NULL);
 		policy_mgr_mode_specific_num_active_sessions(p2p_soc_obj->soc,
-							     QDF_NDI_MODE,
-							     &ndp_num);
+							QDF_NDI_MODE,
+							&ndp_num);
 		policy_mgr_mode_specific_num_active_sessions(p2p_soc_obj->soc,
-							     QDF_NAN_DISC_MODE,
-							     &nan_disc_enabled_num);
-
+							QDF_NAN_DISC_MODE,
+							&nan_disc_enabled_num);
 		p2p_debug("present go number:%d, NDP number:%d, NAN number:%d",
-			  go_num, ndp_num, nan_disc_enabled_num);
+			go_num, ndp_num, nan_disc_enabled_num);
 
 		is_dbs = policy_mgr_is_hw_dbs_capable(p2p_soc_obj->soc);
 
@@ -144,26 +144,32 @@ static QDF_STATUS p2p_scan_start(struct p2p_roc_context *roc_ctx)
 		/* this is to protect too huge value if some customers
 		 * give a higher value from supplicant
 		 */
-		if (ndp_num) {
-			if (is_dbs && req->scan_req.dwell_time_passive >
-			    P2P_MAX_ROC_DURATION_DBS_NDP_PRESENT)
+
+		if (go_num && req->scan_req.dwell_time_passive >
+			P2P_MAX_ROC_DURATION_GO_PRESENT) {
 				req->scan_req.dwell_time_passive =
-					P2P_MAX_ROC_DURATION_DBS_NDP_PRESENT;
+					P2P_MAX_ROC_DURATION_GO_PRESENT;
+		} else if (ndp_num) {
+			if (is_dbs && req->scan_req.dwell_time_passive >
+				P2P_MAX_ROC_DURATION_DBS_NDP_PRESENT)
+					req->scan_req.dwell_time_passive =
+						P2P_MAX_ROC_DURATION_DBS_NDP_PRESENT;
 			else if (!is_dbs && req->scan_req.dwell_time_passive >
-				 P2P_MAX_ROC_DURATION_NON_DBS_NDP_PRESENT)
+				P2P_MAX_ROC_DURATION_NON_DBS_NDP_PRESENT)
 				req->scan_req.dwell_time_passive =
 					P2P_MAX_ROC_DURATION_NON_DBS_NDP_PRESENT;
 		} else if (nan_disc_enabled_num) {
 			if (is_dbs && req->scan_req.dwell_time_passive >
-			    P2P_MAX_ROC_DURATION_DBS_NAN_PRESENT)
-				req->scan_req.dwell_time_passive =
+				 P2P_MAX_ROC_DURATION_DBS_NAN_PRESENT)
+					req->scan_req.dwell_time_passive =
 					P2P_MAX_ROC_DURATION_DBS_NAN_PRESENT;
 			else if (!is_dbs && req->scan_req.dwell_time_passive >
-				 P2P_MAX_ROC_DURATION_NON_DBS_NAN_PRESENT)
-				req->scan_req.dwell_time_passive =
-					P2P_MAX_ROC_DURATION_NON_DBS_NAN_PRESENT;
-		} else if (req->scan_req.dwell_time_passive >
-			   P2P_MAX_ROC_DURATION) {
+				P2P_MAX_ROC_DURATION_NON_DBS_NAN_PRESENT)
+					req->scan_req.dwell_time_passive =
+						P2P_MAX_ROC_DURATION_NON_DBS_NAN_PRESENT;
+
+		else if (req->scan_req.dwell_time_passive >
+			P2P_MAX_ROC_DURATION)
 			req->scan_req.dwell_time_passive = P2P_MAX_ROC_DURATION;
 		}
 	}
@@ -208,6 +214,7 @@ static QDF_STATUS p2p_scan_abort(struct p2p_roc_context *roc_ctx)
 
 	req = qdf_mem_malloc(sizeof(*req));
 	if (!req) {
+		p2p_err("failed to alloc scan cancel request");
 		status = QDF_STATUS_E_NOMEM;
 		goto fail;
 	}
@@ -703,7 +710,7 @@ QDF_STATUS p2p_restart_roc_timer(struct p2p_roc_context *roc_ctx)
 
 	if (QDF_TIMER_STATE_RUNNING ==
 		qdf_mc_timer_get_current_state(&roc_ctx->roc_timer)) {
-		p2p_debug("roc restart duration:%d", roc_ctx->duration);
+		p2p_debug("roc timer is running");
 		status = qdf_mc_timer_stop_sync(&roc_ctx->roc_timer);
 		if (status != QDF_STATUS_SUCCESS) {
 			p2p_err("Failed to stop roc timer");
@@ -735,8 +742,10 @@ QDF_STATUS p2p_cleanup_roc_sync(
 
 	p2p_debug("p2p_soc_obj:%pK, vdev:%pK", p2p_soc_obj, vdev);
 	param = qdf_mem_malloc(sizeof(*param));
-	if (!param)
+	if (!param) {
+		p2p_err("failed to allocate cleanup param");
 		return QDF_STATUS_E_NOMEM;
+	}
 
 	param->p2p_soc_obj = p2p_soc_obj;
 	if (vdev)
