@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -26,7 +26,10 @@
 
 #ifdef WLAN_CFR_ENABLE
 
-#define HDD_INVALID_GROUP_ID 16
+#include "wlan_cfr_utils_api.h"
+
+#define HDD_INVALID_GROUP_ID MAX_TA_RA_ENTRIES
+#define LEGACY_CFR_VERSION 1
 #define ENHANCED_CFR_VERSION 2
 
 /**
@@ -46,13 +49,18 @@ wlan_hdd_cfg80211_peer_cfr_capture_cfg(struct wiphy *wiphy,
 				       const void *data,
 				       int data_len);
 
+extern const struct nla_policy cfr_config_policy[
+			QCA_WLAN_VENDOR_ATTR_PEER_CFR_MAX + 1];
+
 #define FEATURE_CFR_VENDOR_COMMANDS \
 { \
 	.info.vendor_id = QCA_NL80211_VENDOR_ID, \
 	.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_PEER_CFR_CAPTURE_CFG, \
 	.flags = WIPHY_VENDOR_CMD_NEED_WDEV | \
 			WIPHY_VENDOR_CMD_NEED_NETDEV, \
-	.doit = wlan_hdd_cfg80211_peer_cfr_capture_cfg \
+	.doit = wlan_hdd_cfg80211_peer_cfr_capture_cfg, \
+	vendor_command_policy(cfr_config_policy, \
+			      QCA_WLAN_VENDOR_ATTR_PEER_CFR_MAX) \
 },
 #else
 #define FEATURE_CFR_VENDOR_COMMANDS

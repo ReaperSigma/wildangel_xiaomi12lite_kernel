@@ -42,7 +42,7 @@
  *
  * Supported Feature: Concurrency
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -68,7 +68,7 @@
  *
  * Supported Feature: DBS
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -89,7 +89,7 @@
  *
  * Supported Feature: Concurrency
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -147,7 +147,7 @@
  *
  * Supported Feature: DBS
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -186,7 +186,7 @@
  *
  * Supported Feature: DBS
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -210,7 +210,7 @@
  *
  * Supported Feature: Concurrency
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -236,7 +236,7 @@
  *
  * Supported Feature: Concurrency
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -258,14 +258,13 @@
  *
  * Supported Feature: Concurrency
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
-#define CFG_ENABLE_MCC_ADAPTIVE_SCH_ENABLED_NAME CFG_INI_UINT(\
+#define CFG_ENABLE_MCC_ADAPTIVE_SCH_ENABLED_NAME CFG_INI_BOOL(\
 					"gEnableMCCAdaptiveScheduler", \
-					0, 1, 1, \
-					CFG_VALUE_OR_DEFAULT, \
+					true, \
 					"Enable/Disable MCC Adaptive Scheduler")
 
 /*
@@ -281,7 +280,7 @@
  *
  * Supported Feature: Concurrency
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -319,7 +318,7 @@
  *
  * Supported Feature: Concurrency
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -341,7 +340,7 @@ CFG_INI_UINT("gAllowMCCGODiffBI", 0, 4, 4, CFG_VALUE_OR_DEFAULT, \
  *
  * Supported Feature: STA
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -376,7 +375,7 @@ CFG_INI_UINT("gEnableOverLapCh", 0, 1, 0, CFG_VALUE_OR_DEFAULT, \
  *
  * Supported Feature: DBS
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -396,6 +395,9 @@ CFG_INI_UINT("gDualMacFeatureDisable", 0, 6, 6, CFG_VALUE_OR_DEFAULT, \
  * support disabled, the value is defined by enum PM_AP_DFS_MASTER_MODE.
  * 0 - Disallow STA+SAP SCC on DFS channel
  * 1 - Allow STA+SAP SCC on DFS channel with master mode disabled
+ *       This needs gEnableDFSMasterCap enabled to allow SAP SCC with
+ *       STA on DFS but dfs master mode disabled. Single SAP is not allowed
+ *       on DFS.
  * 2 - enhance "1" with below requirement
  *	 a. Allow single SAP (GO) start on DFS channel.
  *	 b. Allow CAC process on DFS channel in single SAP (GO) mode
@@ -409,7 +411,7 @@ CFG_INI_UINT("gDualMacFeatureDisable", 0, 6, 6, CFG_VALUE_OR_DEFAULT, \
  *
  * Supported Feature: Non-DBS, DBS
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -417,6 +419,40 @@ CFG_INI_UINT("gDualMacFeatureDisable", 0, 6, 6, CFG_VALUE_OR_DEFAULT, \
 #define CFG_STA_SAP_SCC_ON_DFS_CHAN \
 CFG_INI_UINT("g_sta_sap_scc_on_dfs_chan", 0, 2, 2, CFG_VALUE_OR_DEFAULT, \
 	     "Allow STA+SAP SCC on DFS channel with master mode disable")
+
+/*
+ * <ini>
+ * mi_sap_only_allow_sta_dfs_indoor_chan - Only when mac is already working
+ * in the dfs/indoor channel, sap are allowed to work in the same channel.
+ * @Min: 0
+ * @Max: 1
+ * @Default: 1
+ *
+ * One of wlan interface work on dfs channel or indoor channel,
+ * then, sap can work on this channel.
+ * If not, dfs and indoor channels cannot be used by sap.
+ *
+ * 0 - No restrictions on dfs/indoor channels.
+ * 1 - Only when mac is already working in the dfs/indoor channel,
+ * sap are allowed to work in the same channel. Note that
+ * need to enable three related configurations
+ *
+ * Related:
+ * gEnableDFSMasterCap=1
+ * g_sta_sap_scc_on_dfs_chan=2
+ * gindoor_channel_support=1
+
+ *
+ * Supported Feature: Non-DBS, DBS
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+
+#define CFG_SAP_ONLY_ALLOW_STA_DFS_INDOOR_CHAN \
+CFG_INI_UINT("mi_sap_only_allow_sta_dfs_indoor_chan", 0, 1, 1, CFG_VALUE_OR_DEFAULT, \
+	     "Do not allow go/p2p to work on dfs/indoor chan outside mac working freq")
 
 /*
  * <ini>
@@ -460,7 +496,7 @@ CFG_INI_UINT("gForce1x1Exception", 0, 2, 1, CFG_VALUE_OR_DEFAULT, \
  * Supported Feature: SAP
  *
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -484,7 +520,7 @@ CFG_INI_UINT("gEnableSAPManadatoryChanList", 0, 1, 0, CFG_VALUE_OR_DEFAULT, \
  *
  * Supported Feature: Non-DBS, DBS
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -507,7 +543,7 @@ CFG_INI_BOOL("g_nan_sap_scc_on_lte_coex_chan", 1, \
  *
  * Supported Feature: Non-DBS, DBS
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -581,7 +617,7 @@ CFG_INI_UINT("g_enable_go_force_scc", 0, 1, 0, CFG_VALUE_OR_DEFAULT, \
  * Supported Feature: STA, SAP
  *
  *
- * Usage: Internal/External
+ * Usage: External
  *
  * </ini>
  */
@@ -626,6 +662,7 @@ CFG_INI_UINT("g_prefer_5g_scc_to_dbs", 0, 0xFFFFFFFF, 0, CFG_VALUE_OR_DEFAULT, \
 		CFG(CFG_ENABLE_OVERLAP_CH)\
 		CFG(CFG_DUAL_MAC_FEATURE_DISABLE)\
 		CFG(CFG_STA_SAP_SCC_ON_DFS_CHAN)\
+		CFG(CFG_SAP_ONLY_ALLOW_STA_DFS_INDOOR_CHAN)\
 		CFG(CFG_FORCE_1X1_FEATURE)\
 		CFG(CFG_ENABLE_SAP_MANDATORY_CHAN_LIST)\
 		CFG(CFG_STA_SAP_SCC_ON_LTE_COEX_CHAN)\

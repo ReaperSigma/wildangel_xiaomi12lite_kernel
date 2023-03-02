@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -60,6 +60,7 @@ static void nan_cfg_init(struct wlan_objmgr_psoc *psoc,
 	nan_obj->cfg_param.max_ndi = cfg_get(psoc, CFG_NDI_MAX_SUPPORT);
 	nan_obj->cfg_param.nan_feature_config =
 					cfg_get(psoc, CFG_NAN_FEATURE_CONFIG);
+	nan_obj->cfg_param.disable_6g_nan = cfg_get(psoc, CFG_DISABLE_6G_NAN);
 }
 
 /**
@@ -93,6 +94,18 @@ static void nan_cfg_dp_init(struct wlan_objmgr_psoc *psoc,
 {
 }
 #endif
+
+bool ucfg_get_disable_6g_nan(struct wlan_objmgr_psoc *psoc)
+{
+	struct nan_psoc_priv_obj *nan_obj = nan_get_psoc_priv_obj(psoc);
+
+	if (!nan_obj) {
+		nan_err("nan psoc priv object is NULL");
+		return cfg_default(CFG_DISABLE_6G_NAN);
+	}
+
+	return nan_obj->cfg_param.disable_6g_nan;
+}
 
 QDF_STATUS ucfg_nan_psoc_open(struct wlan_objmgr_psoc *psoc)
 {
@@ -385,7 +398,7 @@ QDF_STATUS ucfg_nan_req_processor(struct wlan_objmgr_vdev *vdev,
 	struct scheduler_msg msg = {0};
 	int err;
 	struct nan_psoc_priv_obj *psoc_obj = NULL;
-	struct osif_request *request;
+	struct osif_request *request = NULL;
 	static const struct osif_request_params params = {
 		.priv_size = 0,
 		.timeout_ms = WLAN_WAIT_TIME_NDP_END,
@@ -410,6 +423,12 @@ QDF_STATUS ucfg_nan_req_processor(struct wlan_objmgr_vdev *vdev,
 			nan_err("nan psoc priv object is NULL");
 			return QDF_STATUS_E_INVAL;
 		}
+		request = osif_request_alloc(&params);
+		if (!request) {
+			nan_err("Request allocation failure");
+			return QDF_STATUS_E_NOMEM;
+		}
+		psoc_obj->ndp_request_ctx = osif_request_cookie(request);
 		break;
 	case NDP_END_ALL:
 		len = sizeof(struct nan_datapath_end_all_ndps);
@@ -421,9 +440,10 @@ QDF_STATUS ucfg_nan_req_processor(struct wlan_objmgr_vdev *vdev,
 
 	msg.bodyptr = qdf_mem_malloc(len);
 	if (!msg.bodyptr) {
-		nan_err("malloc failed");
-		return QDF_STATUS_E_NOMEM;
+		status = QDF_STATUS_E_NOMEM;
+		goto fail;
 	}
+
 	qdf_mem_copy(msg.bodyptr, in_req, len);
 	msg.type = req_type;
 	msg.callback = nan_scheduled_msg_handler;
@@ -434,32 +454,27 @@ QDF_STATUS ucfg_nan_req_processor(struct wlan_objmgr_vdev *vdev,
 	if (QDF_IS_STATUS_ERROR(status)) {
 		nan_err("failed to post msg to NAN component, status: %d",
 			status);
-		qdf_mem_free(msg.bodyptr);
-		return status;
+		goto fail;
 	}
 
 	if (req_type == NDP_END_REQ) {
-		/* Wait for NDP_END indication */
-		if (!psoc_obj) {
-			nan_err("nan psoc priv object is NULL");
-			return QDF_STATUS_E_INVAL;
-		}
-		request = osif_request_alloc(&params);
-		if (!request) {
-			nan_err("Request allocation failure");
-			return QDF_STATUS_E_NOMEM;
-		}
-		psoc_obj->request_context = osif_request_cookie(request);
-
 		nan_debug("Wait for NDP END indication");
 		err = osif_request_wait_for_response(request);
 		if (err)
 			nan_debug("NAN request timed out: %d", err);
 		osif_request_put(request);
-		psoc_obj->request_context = NULL;
+		psoc_obj->ndp_request_ctx = NULL;
 	}
 
 	return QDF_STATUS_SUCCESS;
+
+fail:
+	qdf_mem_free(msg.bodyptr);
+	if (req_type == NDP_END_REQ) {
+		osif_request_put(request);
+		psoc_obj->ndp_request_ctx = NULL;
+	}
+	return status;
 }
 
 void ucfg_nan_datapath_event_handler(struct wlan_objmgr_psoc *psoc,
@@ -517,6 +532,8 @@ int ucfg_nan_register_hdd_callbacks(struct wlan_objmgr_psoc *psoc,
 				cb_obj->os_if_nan_event_handler;
 	psoc_obj->cb_obj.ucfg_nan_request_process_cb =
 				ucfg_nan_request_process_cb;
+	psoc_obj->cb_obj.nan_concurrency_update =
+				cb_obj->nan_concurrency_update;
 
 	return 0;
 }
@@ -566,7 +583,7 @@ void ucfg_nan_set_tgt_caps(struct wlan_objmgr_psoc *psoc,
 	psoc_priv->nan_caps = *nan_caps;
 }
 
-bool ucfg_is_nan_disable_supported(struct wlan_objmgr_psoc *psoc)
+bool ucfg_is_nan_conc_control_supported(struct wlan_objmgr_psoc *psoc)
 {
 	struct nan_psoc_priv_obj *psoc_priv;
 
@@ -576,7 +593,7 @@ bool ucfg_is_nan_disable_supported(struct wlan_objmgr_psoc *psoc)
 		return false;
 	}
 
-	return (psoc_priv->nan_caps.nan_disable_supported == 1);
+	return (psoc_priv->nan_caps.nan_conc_control == 1);
 }
 
 bool ucfg_is_nan_dbs_supported(struct wlan_objmgr_psoc *psoc)
@@ -645,6 +662,9 @@ QDF_STATUS ucfg_nan_discovery_req(void *in_req, uint32_t req_type)
 				nan_err("nan psoc priv object is NULL");
 				return QDF_STATUS_E_INVAL;
 			}
+
+			if (policy_mgr_is_sta_mon_concurrency(psoc))
+				return QDF_STATUS_E_INVAL;
 
 			/*
 			 * Take a psoc reference while it is being used by the
@@ -745,7 +765,7 @@ QDF_STATUS ucfg_nan_discovery_req(void *in_req, uint32_t req_type)
 		return QDF_STATUS_E_NOMEM;
 	}
 
-	psoc_priv->request_context = osif_request_cookie(request);
+	psoc_priv->nan_disc_request_ctx = osif_request_cookie(request);
 	if (req_type == NAN_DISABLE_REQ)
 		psoc_priv->is_explicit_disable = true;
 
@@ -770,8 +790,9 @@ post_msg:
 							NAN_DISC_DISABLED);
 				policy_mgr_check_n_start_opportunistic_timer(
 									psoc);
-			} else if (req_type == NAN_DISABLE_REQ)
+			} else if (req_type == NAN_DISABLE_REQ) {
 				nan_disable_cleanup(psoc);
+			}
 		}
 		if (req_type == NAN_DISABLE_REQ)
 			psoc_priv->is_explicit_disable = false;
@@ -799,7 +820,7 @@ void ucfg_nan_disable_concurrency(struct wlan_objmgr_psoc *psoc)
 		return;
 	}
 
-	if (!ucfg_is_nan_disable_supported(psoc))
+	if (!ucfg_is_nan_conc_control_supported(psoc))
 		return;
 
 	qdf_spin_lock_bh(&psoc_priv->lock);
@@ -999,7 +1020,7 @@ QDF_STATUS ucfg_ndi_remove_entry_from_policy_mgr(struct wlan_objmgr_vdev *vdev)
 	qdf_spin_unlock_bh(&vdev_priv_obj->lock);
 
 	if (state == NAN_DATA_NDI_DELETED_STATE &&
-	    psoc_priv_obj->nan_caps.ndi_dbs_supported &&
+	    NDI_CONCURRENCY_SUPPORTED(psoc) &&
 	    active_ndp_peers) {
 		nan_info("Delete NDP peers: %u and remove NDI from policy mgr",
 			 active_ndp_peers);
@@ -1109,6 +1130,19 @@ ucfg_nan_is_sta_nan_ndi_4_port_allowed(struct wlan_objmgr_psoc *psoc)
 	}
 
 	return psoc_nan_obj->nan_caps.sta_nan_ndi_ndi_allowed;
+}
+
+bool ucfg_nan_is_beamforming_supported(struct wlan_objmgr_psoc *psoc)
+{
+	struct nan_psoc_priv_obj *psoc_nan_obj;
+
+	psoc_nan_obj = nan_get_psoc_priv_obj(psoc);
+	if (!psoc_nan_obj) {
+		nan_err("psoc_nan_obj is null");
+		return false;
+	}
+
+	return psoc_nan_obj->nan_caps.ndi_txbf_supported;
 }
 
 static inline bool
@@ -1259,10 +1293,9 @@ QDF_STATUS ucfg_nan_disable_ind_to_userspace(struct wlan_objmgr_psoc *psoc)
 
 	disable_ind = qdf_mem_malloc(sizeof(struct nan_event_params) +
 				     sizeof(msg));
-	if (!disable_ind) {
-		nan_err("failed to alloc disable_ind");
+	if (!disable_ind)
 		return QDF_STATUS_E_NOMEM;
-	}
+
 	disable_ind->psoc = psoc,
 	disable_ind->evt_type = nan_event_id_disable_ind;
 	disable_ind->buf_len = sizeof(msg);

@@ -50,8 +50,7 @@
 #define APF_MAX \
 	QCA_WLAN_VENDOR_ATTR_PACKET_FILTER_MAX
 
-static const struct nla_policy
-wlan_hdd_apf_offload_policy[APF_MAX + 1] = {
+const struct nla_policy wlan_hdd_apf_offload_policy[APF_MAX + 1] = {
 	[APF_SUBCMD] = {.type = NLA_U32},
 	[APF_VERSION] = {.type = NLA_U32},
 	[APF_FILTER_ID] = {.type = NLA_U32},
@@ -318,6 +317,7 @@ fail:
 static int
 hdd_enable_disable_apf(struct hdd_adapter *adapter, bool apf_enable)
 {
+	/*
 	QDF_STATUS status;
 
 	status = sme_set_apf_enable_disable(hdd_adapter_get_mac_handle(adapter),
@@ -329,7 +329,7 @@ hdd_enable_disable_apf(struct hdd_adapter *adapter, bool apf_enable)
 	}
 
 	adapter->apf_context.apf_enabled = apf_enable;
-
+	*/
 	return 0;
 }
 

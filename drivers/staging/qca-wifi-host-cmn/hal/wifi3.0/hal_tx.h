@@ -463,6 +463,19 @@ static inline void hal_tx_desc_set_hlos_tid(void *desc,
 	HAL_SET_FLD(desc, TCL_DATA_CMD_4, HLOS_TID_OVERWRITE) |=
 	   HAL_TX_SM(TCL_DATA_CMD_4, HLOS_TID_OVERWRITE, 1);
 }
+
+/**
+ * hal_tx_desc_clear - Clear the HW descriptor entry
+ * @hw_desc: Hardware descriptor to be cleared
+ *
+ * Return: void
+ */
+static inline void hal_tx_desc_clear(void *hw_desc)
+{
+	qdf_mem_set(hw_desc + sizeof(struct tlv_32_hdr),
+		    HAL_TX_DESC_LEN_BYTES, 0);
+}
+
 /**
  * hal_tx_desc_sync - Commit the descriptor to Hardware
  * @hal_tx_des_cached: Cached descriptor that software maintains
@@ -805,6 +818,42 @@ uint8_t hal_tx_comp_get_release_reason(void *hal_desc,
 }
 
 /**
+ * hal_tx_comp_get_peer_id() - Get peer_id value()
+ * @hal_desc: completion ring descriptor pointer
+ *
+ * This function will get peer_id value from Tx completion descriptor
+ *
+ * Return: buffer release source
+ */
+static inline uint16_t hal_tx_comp_get_peer_id(void *hal_desc)
+{
+	uint32_t comp_desc =
+		*(uint32_t *)(((uint8_t *)hal_desc) +
+			       WBM_RELEASE_RING_7_SW_PEER_ID_OFFSET);
+
+	return (comp_desc & WBM_RELEASE_RING_7_SW_PEER_ID_MASK) >>
+		WBM_RELEASE_RING_7_SW_PEER_ID_LSB;
+}
+
+/**
+ * hal_tx_comp_get_tx_status() - Get tx transmission status()
+ * @hal_desc: completion ring descriptor pointer
+ *
+ * This function will get transmit status value from Tx completion descriptor
+ *
+ * Return: buffer release source
+ */
+static inline uint8_t hal_tx_comp_get_tx_status(void *hal_desc)
+{
+	uint32_t comp_desc =
+		*(uint32_t *)(((uint8_t *)hal_desc) +
+			       WBM_RELEASE_RING_2_TQM_RELEASE_REASON_OFFSET);
+
+	return (comp_desc & WBM_RELEASE_RING_2_TQM_RELEASE_REASON_MASK) >>
+		WBM_RELEASE_RING_2_TQM_RELEASE_REASON_LSB;
+}
+
+/**
  * hal_tx_comp_desc_sync() - collect hardware descriptor contents
  * @hal_desc: hardware descriptor pointer
  * @comp: software descriptor pointer
@@ -1055,9 +1104,10 @@ static inline void hal_tx_comp_get_status(void *desc, void *ts,
  * Return: void
  */
 static inline
-void hal_tx_desc_set_buf_addr(void *desc, dma_addr_t paddr,
+void hal_tx_desc_set_buf_addr(hal_soc_handle_t hal_soc_hdl, void *desc,
+			      dma_addr_t paddr,
 			      uint8_t pool_id, uint32_t desc_id,
-			      uint8_t type, hal_soc_handle_t hal_soc_hdl)
+			      uint8_t type)
 {
 	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
 
