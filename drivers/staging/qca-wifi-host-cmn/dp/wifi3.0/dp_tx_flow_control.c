@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2015-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -30,8 +29,6 @@
 #include "dp_internal.h"
 #define INVALID_FLOW_ID 0xFF
 #define MAX_INVALID_BIN 3
-#define GLOBAL_FLOW_POOL_STATS_LEN 25
-#define FLOW_POOL_LOG_LEN 50
 
 #ifdef QCA_AC_BASED_FLOW_CONTROL
 /**
@@ -73,8 +70,9 @@ dp_tx_initialize_threshold(struct dp_tx_desc_pool_s *pool,
 	pool->stop_th[DP_TH_HI] = (pool->stop_th[DP_TH_BE_BK]
 					* FL_TH_HI_PERCENTAGE) / 100;
 
-	dp_debug("tx flow control threshold is set, pool size is %d",
-		 flow_pool_size);
+	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
+		  "%s: tx flow control threshold is set, pool size is %d",
+		  __func__, flow_pool_size);
 }
 
 /**
@@ -90,7 +88,20 @@ dp_tx_flow_pool_reattach(struct dp_tx_desc_pool_s *pool)
 		  "%s: flow pool already allocated, attached %d times",
 		  __func__, pool->pool_create_cnt);
 
-	pool->status = FLOW_POOL_ACTIVE_UNPAUSED_REATTACH;
+	if (pool->avail_desc > pool->start_th[DP_TH_BE_BK])
+		pool->status = FLOW_POOL_ACTIVE_UNPAUSED;
+	else if (pool->avail_desc <= pool->start_th[DP_TH_BE_BK] &&
+		 pool->avail_desc > pool->start_th[DP_TH_VI])
+		pool->status = FLOW_POOL_BE_BK_PAUSED;
+	else if (pool->avail_desc <= pool->start_th[DP_TH_VI] &&
+		 pool->avail_desc > pool->start_th[DP_TH_VO])
+		pool->status = FLOW_POOL_VI_PAUSED;
+	else if (pool->avail_desc <= pool->start_th[DP_TH_VO] &&
+		 pool->avail_desc > pool->start_th[DP_TH_HI])
+		pool->status = FLOW_POOL_VO_PAUSED;
+	else
+		pool->status = FLOW_POOL_ACTIVE_PAUSED;
+
 	pool->pool_create_cnt++;
 }
 
@@ -115,48 +126,6 @@ dp_tx_flow_pool_dump_threshold(struct dp_tx_desc_pool_s *pool)
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
 			  "Level %d :: Latest pause timestamp %lu",
 			  i, pool->latest_pause_time[i]);
-	}
-}
-
-/**
- * dp_tx_flow_ctrl_reset_subqueues() - Reset subqueues to orginal state
- * @soc: dp soc
- * @pool: flow pool
- * @pool_status: flow pool status
- *
- * Return: none
- */
-static inline void
-dp_tx_flow_ctrl_reset_subqueues(struct dp_soc *soc,
-				struct dp_tx_desc_pool_s *pool,
-				enum flow_pool_status pool_status)
-{
-	switch (pool_status) {
-	case FLOW_POOL_ACTIVE_PAUSED:
-		soc->pause_cb(pool->flow_pool_id,
-			      WLAN_NETIF_PRIORITY_QUEUE_ON,
-			      WLAN_DATA_FLOW_CTRL_PRI);
-		/* fallthrough */
-
-	case FLOW_POOL_VO_PAUSED:
-		soc->pause_cb(pool->flow_pool_id,
-			      WLAN_NETIF_VO_QUEUE_ON,
-			      WLAN_DATA_FLOW_CTRL_VO);
-		/* fallthrough */
-
-	case FLOW_POOL_VI_PAUSED:
-		soc->pause_cb(pool->flow_pool_id,
-			      WLAN_NETIF_VI_QUEUE_ON,
-			      WLAN_DATA_FLOW_CTRL_VI);
-		/* fallthrough */
-
-	case FLOW_POOL_BE_BK_PAUSED:
-		soc->pause_cb(pool->flow_pool_id,
-			      WLAN_NETIF_BE_BK_QUEUE_ON,
-			      WLAN_DATA_FLOW_CTRL_BE_BK);
-		/* fallthrough */
-	default:
-		break;
 	}
 }
 
@@ -193,13 +162,6 @@ dp_tx_flow_pool_dump_threshold(struct dp_tx_desc_pool_s *pool)
 	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
 		  "Start threshold %d :: Stop threshold %d",
 	pool->start_th, pool->stop_th);
-}
-
-static inline void
-dp_tx_flow_ctrl_reset_subqueues(struct dp_soc *soc,
-				struct dp_tx_desc_pool_s *pool,
-				enum flow_pool_status pool_status)
-{
 }
 
 #endif
@@ -260,48 +222,6 @@ void dp_tx_dump_flow_pool_info(struct cdp_soc_t *soc_hdl)
 	qdf_spin_unlock_bh(&soc->flow_pool_array_lock);
 }
 
-void dp_tx_dump_flow_pool_info_compact(struct dp_soc *soc)
-{
-#ifdef WLAN_DEBUG
-	struct dp_txrx_pool_stats *pool_stats = &soc->pool_stats;
-	struct dp_tx_desc_pool_s *pool = NULL;
-	char *comb_log_str;
-	uint32_t comb_log_str_size;
-	int bytes_written = 0;
-	int i;
-
-	comb_log_str_size = GLOBAL_FLOW_POOL_STATS_LEN +
-				(FLOW_POOL_LOG_LEN * MAX_TXDESC_POOLS) + 1;
-	comb_log_str = qdf_mem_malloc(comb_log_str_size);
-	if (!comb_log_str)
-		return;
-
-	bytes_written = qdf_snprintf(&comb_log_str[bytes_written],
-				     comb_log_str_size, "G:(%d,%d,%d) ",
-				     pool_stats->pool_map_count,
-				     pool_stats->pool_unmap_count,
-				     pool_stats->pkt_drop_no_pool);
-
-	for (i = 0; i < MAX_TXDESC_POOLS; i++) {
-		pool = &soc->tx_desc[i];
-		if (pool->status > FLOW_POOL_INVALID)
-			continue;
-		bytes_written += qdf_snprintf(&comb_log_str[bytes_written],
-				      (bytes_written >= comb_log_str_size) ? 0 :
-				      comb_log_str_size - bytes_written,
-				      "| %d %d: (%d,%d,%d)",
-				      pool->flow_pool_id, pool->status,
-				      pool->pool_size, pool->avail_desc,
-				      pool->pkt_drop_no_desc);
-	}
-
-	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO_HIGH,
-		  "FLOW_POOL_STATS %s", comb_log_str);
-
-	qdf_mem_free(comb_log_str);
-#endif
-}
-
 /**
  * dp_tx_clear_flow_pool_stats() - clear flow pool statistics
  *
@@ -354,12 +274,6 @@ struct dp_tx_desc_pool_s *dp_tx_create_flow_pool(struct dp_soc *soc,
 		return NULL;
 	}
 
-	if (dp_tx_desc_pool_init(soc, flow_pool_id, flow_pool_size)) {
-		dp_tx_desc_pool_free(soc, flow_pool_id);
-		qdf_spin_unlock_bh(&pool->flow_pool_lock);
-		return NULL;
-	}
-
 	stop_threshold = wlan_cfg_get_tx_flow_stop_queue_th(soc->wlan_cfg_ctx);
 	start_threshold = stop_threshold +
 		wlan_cfg_get_tx_flow_start_queue_offset(soc->wlan_cfg_ctx);
@@ -394,7 +308,6 @@ int dp_tx_delete_flow_pool(struct dp_soc *soc, struct dp_tx_desc_pool_s *pool,
 	bool force)
 {
 	struct dp_vdev *vdev;
-	enum flow_pool_status pool_status;
 
 	if (!soc || !pool) {
 		dp_err("pool or soc is NULL");
@@ -420,25 +333,18 @@ int dp_tx_delete_flow_pool(struct dp_soc *soc, struct dp_tx_desc_pool_s *pool,
 	}
 
 	if (pool->avail_desc < pool->pool_size) {
-		pool_status = pool->status;
 		pool->status = FLOW_POOL_INVALID;
-		dp_tx_flow_ctrl_reset_subqueues(soc, pool, pool_status);
-
 		qdf_spin_unlock_bh(&pool->flow_pool_lock);
 		/* Reset TX desc associated to this Vdev as NULL */
-		vdev = dp_vdev_get_ref_by_id(soc, pool->flow_pool_id,
-					     DP_MOD_ID_MISC);
-		if (vdev) {
+		vdev = dp_get_vdev_from_soc_vdev_id_wifi3(soc,
+							  pool->flow_pool_id);
+		if (vdev)
 			dp_tx_desc_flush(vdev->pdev, vdev, false);
-			dp_vdev_unref_delete(soc, vdev,
-					     DP_MOD_ID_MISC);
-		}
 		dp_err("avail desc less than pool size");
 		return -EAGAIN;
 	}
 
 	/* We have all the descriptors for the pool, we can delete the pool */
-	dp_tx_desc_pool_deinit(soc, pool->flow_pool_id);
 	dp_tx_desc_pool_free(soc, pool->flow_pool_id);
 	qdf_spin_unlock_bh(&pool->flow_pool_lock);
 	return 0;
@@ -458,7 +364,7 @@ static void dp_tx_flow_pool_vdev_map(struct dp_pdev *pdev,
 	struct dp_vdev *vdev;
 	struct dp_soc *soc = pdev->soc;
 
-	vdev = dp_vdev_get_ref_by_id(soc, vdev_id, DP_MOD_ID_CDP);
+	vdev = dp_get_vdev_from_soc_vdev_id_wifi3(soc, vdev_id);
 	if (!vdev) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
 		   "%s: invalid vdev_id %d",
@@ -471,7 +377,6 @@ static void dp_tx_flow_pool_vdev_map(struct dp_pdev *pdev,
 	pool->pool_owner_ctx = soc;
 	pool->flow_pool_id = vdev_id;
 	qdf_spin_unlock_bh(&pool->flow_pool_lock);
-	dp_vdev_unref_delete(soc, vdev, DP_MOD_ID_CDP);
 }
 
 /**
@@ -488,7 +393,7 @@ static void dp_tx_flow_pool_vdev_unmap(struct dp_pdev *pdev,
 	struct dp_vdev *vdev;
 	struct dp_soc *soc = pdev->soc;
 
-	vdev = dp_vdev_get_ref_by_id(soc, vdev_id, DP_MOD_ID_CDP);
+	vdev = dp_get_vdev_from_soc_vdev_id_wifi3(soc, vdev_id);
 	if (!vdev) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
 		   "%s: invalid vdev_id %d",
@@ -497,7 +402,6 @@ static void dp_tx_flow_pool_vdev_unmap(struct dp_pdev *pdev,
 	}
 
 	vdev->pool = NULL;
-	dp_vdev_unref_delete(soc, vdev, DP_MOD_ID_CDP);
 }
 
 /**
@@ -570,9 +474,9 @@ void dp_tx_flow_pool_unmap_handler(struct dp_pdev *pdev, uint8_t flow_id,
 	struct dp_tx_desc_pool_s *pool;
 	enum htt_flow_type type = flow_type;
 
-	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_DEBUG,
-		  "%s: flow_id %d flow_type %d flow_pool_id %d",
-		  __func__, flow_id, flow_type, flow_pool_id);
+	QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_INFO,
+		"%s: flow_id %d flow_type %d flow_pool_id %d",
+		__func__, flow_id, flow_type, flow_pool_id);
 
 	if (qdf_unlikely(!pdev)) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
@@ -632,8 +536,8 @@ static inline void dp_tx_desc_pool_dealloc(struct dp_soc *soc)
 		if (!tx_desc_pool->desc_pages.num_pages)
 			continue;
 
-		dp_tx_desc_pool_deinit(soc, i);
-		dp_tx_desc_pool_free(soc, i);
+		if (dp_tx_desc_pool_free(soc, i) != QDF_STATUS_SUCCESS)
+			dp_err("Tx Desc Pool:%d Free failed", i);
 	}
 }
 

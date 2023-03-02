@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
  * above copyright notice and this permission notice appear in all
@@ -32,11 +32,6 @@ QDF_STATUS scheduler_disable(void)
 	QDF_BUG(sched_ctx);
 	if (!sched_ctx)
 		return QDF_STATUS_E_INVAL;
-
-	if (!sched_ctx->sch_thread) {
-		sched_debug("Scheduler already disabled");
-		return QDF_STATUS_SUCCESS;
-	}
 
 	/* send shutdown signal to scheduler thread */
 	qdf_atomic_set_bit(MC_SHUTDOWN_EVENT_MASK, &sched_ctx->sch_event_flag);
@@ -288,7 +283,7 @@ QDF_STATUS scheduler_post_msg_by_priority(uint32_t qid,
 	}
 
 	if (!sched_ctx->queue_ctx.scheduler_msg_process_fn[qidx]) {
-		sched_err("callback not registered for qid[%d]", que_id);
+		QDF_DEBUG_PANIC("callback not registered for qid[%d]", que_id);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -469,10 +464,7 @@ QDF_STATUS scheduler_timer_q_mq_handler(struct scheduler_msg *msg)
 	if (msg->reserved != SYS_MSG_COOKIE || msg->type != SYS_MSG_ID_MC_TIMER)
 		return sched_ctx->legacy_sys_handler(msg);
 
-	/* scheduler_msg_process_fn_t and qdf_mc_timer_callback_t have
-	 * different parameters and return type
-	 */
-	timer_callback = (qdf_mc_timer_callback_t)msg->callback;
+	timer_callback = msg->callback;
 	QDF_BUG(timer_callback);
 	if (!timer_callback)
 		return QDF_STATUS_E_FAILURE;
@@ -649,7 +641,7 @@ void scheduler_mc_timer_callback(qdf_mc_timer_t *timer)
 	/* serialize to scheduler controller thread */
 	msg.type = SYS_MSG_ID_MC_TIMER;
 	msg.reserved = SYS_MSG_COOKIE;
-	msg.callback = (scheduler_msg_process_fn_t)callback;
+	msg.callback = callback;
 	msg.bodyptr = user_data;
 	msg.bodyval = 0;
 

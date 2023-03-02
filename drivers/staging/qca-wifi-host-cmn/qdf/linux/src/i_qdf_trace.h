@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -258,7 +258,7 @@ static inline void __qdf_trace_hexdump_dummy(QDF_MODULE_ID module,
 #define QDF_TRACE_EXIT(params...) __qdf_trace_noop(params)
 #endif
 
-// #define QDF_ENABLE_TRACING
+#define QDF_ENABLE_TRACING
 #define qdf_scnprintf scnprintf
 
 #ifdef QDF_ENABLE_TRACING
@@ -339,6 +339,8 @@ static inline void qdf_vprint(const char *fmt, va_list args)
 }
 #endif
 
+#ifdef PANIC_ON_BUG
+#ifdef CONFIG_SLUB_DEBUG
 /**
  * __qdf_bug() - Calls BUG() when the PANIC_ON_BUG compilation option is enabled
  *
@@ -370,11 +372,13 @@ static inline void qdf_vprint(const char *fmt, va_list args)
  *
  * Return: None
  */
-
+void __qdf_bug(void);
+#else /* CONFIG_SLUB_DEBUG */
 static inline void __qdf_bug(void)
 {
 	BUG();
 }
+#endif /* CONFIG_SLUB_DEBUG */
 
 /**
  * QDF_DEBUG_PANIC() - In debug builds, panic, otherwise do nothing
@@ -410,35 +414,26 @@ static inline void __qdf_bug(void)
 		} \
 	} while (0)
 
-#define QDF_BUG_ON_ASSERT(_condition) \
-	do { \
-		if (!(_condition)) { \
-			__qdf_bug(); \
-		} \
-	} while (0)
+#else /* PANIC_ON_BUG */
 
-
-/*#define QDF_DEBUG_PANIC(reason...) \
+#define QDF_DEBUG_PANIC(reason...) \
 	do { \
+		/* no-op */ \
 	} while (false)
 
 #define QDF_DEBUG_PANIC_FL(func, line, fmt, args...) \
 	do { \
+		/* no-op */ \
 	} while (false)
 
 #define QDF_BUG(_condition) \
 	do { \
 		if (!(_condition)) { \
+			/* no-op */ \
 		} \
 	} while (0)
 
-#define QDF_BUG_ON_ASSERT(_condition) \
-	do { \
-		if (!(_condition)) { \
- \
-		} \
-	}
-*/
+#endif /* PANIC_ON_BUG */
 
 #ifdef KSYM_SYMBOL_LEN
 #define __QDF_SYMBOL_LEN KSYM_SYMBOL_LEN
@@ -450,9 +445,8 @@ static inline void __qdf_bug(void)
 static inline void
 __qdf_minidump_log(void *start_addr, size_t size, const char *name)
 {
-	if (minidump_fill_segments((const uintptr_t)start_addr, size,
-				   QCA_WDT_LOG_DUMP_TYPE_WLAN_MOD,
-				   name) < 0)
+	if (fill_minidump_segments((uintptr_t)start_addr, size,
+	    QCA_WDT_LOG_DUMP_TYPE_WLAN_MOD, (char *)name) < 0)
 		QDF_TRACE(QDF_MODULE_ID_QDF, QDF_TRACE_LEVEL_INFO,
 			"%s: failed to log %pK (%s)\n",
 			__func__, start_addr, name);
@@ -461,7 +455,7 @@ __qdf_minidump_log(void *start_addr, size_t size, const char *name)
 static inline void
 __qdf_minidump_remove(void *addr)
 {
-	minidump_remove_segments((const uintptr_t)addr);
+	remove_minidump_segments((uintptr_t)addr);
 }
 #else
 static inline void

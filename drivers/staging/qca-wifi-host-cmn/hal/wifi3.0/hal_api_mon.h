@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -118,16 +118,6 @@
 #define HE_GI_1_6 2
 #define HE_GI_3_2 3
 
-#define HE_GI_RADIOTAP_0_8 0
-#define HE_GI_RADIOTAP_1_6 1
-#define HE_GI_RADIOTAP_3_2 2
-#define HE_GI_RADIOTAP_RESERVED 3
-
-#define HE_LTF_RADIOTAP_UNKNOWN 0
-#define HE_LTF_RADIOTAP_1_X 1
-#define HE_LTF_RADIOTAP_2_X 2
-#define HE_LTF_RADIOTAP_4_X 3
-
 #define HT_SGI_PRESENT 0x80
 
 #define HE_LTF_1_X 0
@@ -154,54 +144,16 @@
 		rs->rs_flags |= (IEEE80211_AMSDU_FLAG); \
 } \
 
-#define HAL_RX_SET_MSDU_AGGREGATION((rs_mpdu), (rs_ppdu))\
-{\
-	if (rs_mpdu->rs_flags & IEEE80211_AMSDU_FLAG)\
-		rs_ppdu->rs_flags |= IEEE80211_AMSDU_FLAG;\
-} \
-
 #else
 #define HAL_RX_GET_MSDU_AGGREGATION(rx_desc, rs)
-#define HAL_RX_SET_MSDU_AGGREGATION(rs_mpdu, rs_ppdu)
 #endif
 
 /* Max MPDUs per status buffer */
 #define HAL_RX_MAX_MPDU 256
 #define HAL_RX_NUM_WORDS_PER_PPDU_BITMAP (HAL_RX_MAX_MPDU >> 5)
-#define HAL_RX_MAX_MPDU_H_PER_STATUS_BUFFER 16
 
 /* Max pilot count */
 #define HAL_RX_MAX_SU_EVM_COUNT 32
-
-/**
- * struct hal_rx_mon_desc_info () - HAL Rx Monitor descriptor info
- *
- * @ppdu_id:                 PHY ppdu id
- * @status_ppdu_id:          status PHY ppdu id
- * @status_buf_count:        number of status buffer count
- * @rxdma_push_reason:       rxdma push reason
- * @rxdma_error_code:        rxdma error code
- * @msdu_cnt:                msdu count
- * @end_of_ppdu:             end of ppdu
- * @link_desc:               msdu link descriptor address
- * @status_buf:              for a PPDU, status buffers can span acrosss
- *                           multiple buffers, status_buf points to first
- *                           status buffer address of PPDU
- * @drop_ppdu:               flag to indicate current destination
- *                           ring ppdu drop
- */
-struct hal_rx_mon_desc_info {
-	uint16_t ppdu_id;
-	uint16_t status_ppdu_id;
-	uint8_t status_buf_count;
-	uint8_t rxdma_push_reason;
-	uint8_t rxdma_error_code;
-	uint8_t msdu_count;
-	uint8_t end_of_ppdu;
-	struct hal_buf_info link_desc;
-	struct hal_buf_info status_buf;
-	bool drop_ppdu;
-};
 
 /*
  * Struct hal_rx_su_evm_info - SU evm info
@@ -272,25 +224,6 @@ bool HAL_RX_HW_DESC_MPDU_VALID(void *hw_desc_addr)
 	return tlv_tag == WIFIRX_MPDU_START_E ? true : false;
 }
 
-/*
- * HAL_RX_HW_DESC_MPDU_VALID() - check MPDU start TLV user id in MPDU
- *			start TLV of Hardware TLV descriptor
- * @hw_desc_addr: Hardware desciptor address
- *
- * Return: unit32_t: user id
- */
-static inline
-uint32_t HAL_RX_HW_DESC_MPDU_USER_ID(void *hw_desc_addr)
-{
-	struct rx_mon_pkt_tlvs *rx_desc =
-		(struct rx_mon_pkt_tlvs *)hw_desc_addr;
-	uint32_t user_id;
-
-	user_id = HAL_RX_GET_USER_TLV32_USERID(
-		&rx_desc->mpdu_start_tlv);
-
-	return user_id;
-}
 
 /* TODO: Move all Rx descriptor functions to hal_rx.h to avoid duplication */
 
@@ -455,13 +388,11 @@ enum {
 /**
  * enum
  * @HAL_RX_MON_PPDU_START: PPDU start TLV is decoded in HAL
- * @HAL_RX_MON_PPDU_END: PPDU end TLV is decoded in HAL
- * @HAL_RX_MON_PPDU_RESET: Not PPDU start and end TLV
+ * @HAL_RX_MON_PPDU_END: PPDU end TLV is decided in HAL
  */
 enum {
 	HAL_RX_MON_PPDU_START = 0,
 	HAL_RX_MON_PPDU_END,
-	HAL_RX_MON_PPDU_RESET,
 };
 
 /* struct hal_rx_ppdu_common_info  - common ppdu info
@@ -489,10 +420,12 @@ struct hal_rx_ppdu_common_info {
  * struct hal_rx_msdu_payload_info - msdu payload info
  * @first_msdu_payload: pointer to first msdu payload
  * @payload_len: payload len
+ * @nbuf: status network buffer to which msdu belongs to
  */
 struct hal_rx_msdu_payload_info {
 	uint8_t *first_msdu_payload;
 	uint32_t payload_len;
+	qdf_nbuf_t nbuf;
 };
 
 /**
@@ -590,47 +523,8 @@ struct hal_rx_ppdu_cfr_user_info {
  * d. CAPTURE_NO_BUFFER: next buffer in IPC ring not available
  *
  * @cfr_user_info: Peer mac for upto 4 MU users
- *
- * @rtt_cfo_measurement : raw cfo data extracted from hardware, which is 14 bit
- * signed number. The first bit used for sign representation and 13 bits for
- * fractional part.
- *
- * @agc_gain_info0: Chain 0 & chain 1 agc gain information reported by PHY
- *
- * @agc_gain_info1: Chain 2 & chain 3 agc gain information reported by PHY
- *
- * @agc_gain_info2: Chain 4 & chain 5 agc gain information reported by PHY
- *
- * @agc_gain_info3: Chain 6 & chain 7 agc gain information reported by PHY
- *
- * @rx_start_ts: Rx packet timestamp, the time the first L-STF ADC sample
- * arrived at Rx antenna.
- *
- * @mcs_rate: Indicates the mcs/rate in which packet is received.
- * If HT,
- *    0-7: MCS0-MCS7
- * If VHT,
- *    0-9: MCS0 to MCS9
- * If HE,
- *    0-11: MCS0 to MCS11,
- *    12-13: 4096QAM,
- *    14-15: reserved
- * If Legacy,
- *    0: 48 Mbps
- *    1: 24 Mbps
- *    2: 12 Mbps
- *    3: 6 Mbps
- *    4: 54 Mbps
- *    5: 36 Mbps
- *    6: 18 Mbps
- *    7: 9 Mbps
- *
- * @gi_type: Indicates the gaurd interval.
- *    0: 0.8 us
- *    1: 0.4 us
- *    2: 1.6 us
- *    3: 3.2 us
  */
+
 struct hal_rx_ppdu_cfr_info {
 	bool bb_captured_channel;
 	bool bb_captured_timeout;
@@ -640,14 +534,6 @@ struct hal_rx_ppdu_cfr_info {
 	uint8_t rtt_che_buffer_pointer_high8;
 	uint32_t rtt_che_buffer_pointer_low32;
 	struct hal_rx_ppdu_cfr_user_info cfr_user_info[HAL_MAX_UL_MU_USERS];
-	int16_t rtt_cfo_measurement;
-	uint32_t agc_gain_info0;
-	uint32_t agc_gain_info1;
-	uint32_t agc_gain_info2;
-	uint32_t agc_gain_info3;
-	uint32_t rx_start_ts;
-	uint32_t mcs_rate;
-	uint32_t gi_type;
 };
 #else
 struct hal_rx_ppdu_cfr_info {};
@@ -658,12 +544,12 @@ struct mon_rx_info {
 	uint16_t qos_control;
 	uint8_t mac_addr1_valid;
 	uint8_t mac_addr1[QDF_MAC_ADDR_SIZE];
-	uint32_t user_id;
 };
 
 struct mon_rx_user_info {
 	uint16_t qos_control;
 	uint8_t qos_control_info_valid;
+	uint32_t bar_frame:1;
 };
 
 struct hal_rx_ppdu_info {
@@ -688,14 +574,8 @@ struct hal_rx_ppdu_info {
 	/* Id to indicate how to process mpdu */
 	uint8_t sw_frame_group_id;
 	struct hal_rx_ppdu_msdu_info rx_msdu_info[HAL_MAX_UL_MU_USERS];
-	/* fcs passed mpdu count in rx monitor status buffer */
-	uint8_t fcs_ok_cnt;
-	/* fcs error mpdu count in rx monitor status buffer */
-	uint8_t fcs_err_cnt;
-	/* MPDU FCS passed */
-	bool is_fcs_passed;
-	/* first msdu payload for all mpdus in rx monitor status buffer */
-	struct hal_rx_msdu_payload_info ppdu_msdu_info[HAL_RX_MAX_MPDU_H_PER_STATUS_BUFFER];
+	/* first msdu payload for all mpdus in ppdu */
+	struct hal_rx_msdu_payload_info ppdu_msdu_info[HAL_RX_MAX_MPDU];
 	/* evm info */
 	struct hal_rx_su_evm_info evm_info;
 	/**

@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -53,9 +52,6 @@
 #include "wlan_reg_ucfg_api.h"
 #include <wlan_objmgr_vdev_obj.h>
 #include <wlan_dfs_utils_api.h>
-#include "wlan_crypto_global_def.h"
-#include "wlan_crypto_global_api.h"
-#include "wlan_cm_bss_score_param.h"
 
 #ifdef FEATURE_6G_SCAN_CHAN_SORT_ALGO
 
@@ -133,7 +129,7 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_psoc *psoc,
 			continue;
 		chan_freq = wlan_reg_chan_opclass_to_freq(rnr_bss->channel_number,
 							  rnr_bss->operating_class,
-							  true);
+							  false);
 		channel = scm_get_chan_meta(psoc, chan_freq);
 		if (!channel) {
 			scm_debug("Failed to get chan Meta freq %d", chan_freq);
@@ -156,66 +152,11 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_psoc *psoc,
 				     QDF_MAC_ADDR_SIZE);
 		if (rnr_bss->short_ssid)
 			rnr_node->entry.short_ssid = rnr_bss->short_ssid;
-		if (rnr_bss->bss_params)
-			rnr_node->entry.bss_params = rnr_bss->bss_params;
 		scm_debug("Add freq %d: "QDF_MAC_ADDR_FMT" short ssid %x", chan_freq,
 			  QDF_MAC_ADDR_REF(rnr_bss->bssid.bytes),
 			  rnr_bss->short_ssid);
 		qdf_list_insert_back(&channel->rnr_list,
 				     &rnr_node->node);
-	}
-}
-
-void scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
-			     uint32_t short_ssid,
-			     struct chan_list *pno_chan_list)
-{
-	uint8_t i;
-	uint32_t freq;
-	struct meta_rnr_channel *chan;
-	struct scan_rnr_node *rnr_node;
-	enum scan_mode_6ghz scan_mode;
-	struct wlan_scan_obj *scan_obj;
-	struct wlan_objmgr_psoc *psoc;
-
-	psoc = wlan_vdev_get_psoc(vdev);
-	if (!psoc)
-		return;
-
-	scan_obj = wlan_vdev_get_scan_obj(vdev);
-	if (!scan_obj) {
-		scm_err("scan_obj is NULL");
-		return;
-	}
-
-	scan_mode = scan_obj->scan_def.scan_mode_6g;
-	/* No Filteration required for below scan modes since
-	 * no RNR flag marked
-	 */
-	if (scan_mode == SCAN_MODE_6G_NO_CHANNEL ||
-	    scan_mode == SCAN_MODE_6G_ALL_CHANNEL ||
-	    scan_mode == SCAN_MODE_6G_ALL_DUTY_CYCLE)
-		return;
-
-	for (i = 0; i < pno_chan_list->num_chan; i++) {
-		freq = pno_chan_list->chan[i].freq;
-
-		chan = scm_get_chan_meta(psoc, freq);
-		if (!chan || qdf_list_empty(&chan->rnr_list))
-			continue;
-
-		qdf_list_for_each(&chan->rnr_list, rnr_node, node) {
-			if (rnr_node->entry.short_ssid) {
-				if (rnr_node->entry.short_ssid == short_ssid) {
-			/* If short ssid entry present in RNR db cache, remove
-			 * FLAG_SCAN_ONLY_IF_RNR_FOUND flag from the channel.
-			 */
-					pno_chan_list->chan[i].flags &=
-						~FLAG_SCAN_ONLY_IF_RNR_FOUND;
-					break;
-				}
-			}
-		}
 	}
 }
 #endif
@@ -497,42 +438,6 @@ static bool scm_bss_is_connected(struct scan_cache_entry *entry)
 		return true;
 	return false;
 }
-
-static bool scm_bss_is_nontx_of_conn_bss(struct scan_cache_entry *entry,
-					 struct scan_dbs *scan_db)
-{
-	int i;
-	struct scan_cache_node *cur_node = NULL;
-	struct scan_cache_node *next_node = NULL;
-
-	if (!entry->mbssid_info.profile_num)
-		return false;
-
-	for (i = 0 ; i < SCAN_HASH_SIZE; i++) {
-		cur_node = scm_get_next_node(scan_db,
-					     &scan_db->scan_hash_tbl[i], NULL);
-		while (cur_node) {
-			if (!memcmp(entry->mbssid_info.trans_bssid,
-				    cur_node->entry->bssid.bytes,
-				    QDF_MAC_ADDR_SIZE)) {
-				if (scm_bss_is_connected(cur_node->entry)) {
-					scm_scan_entry_put_ref(scan_db,
-							       cur_node,
-							       true);
-					return true;
-				}
-			}
-
-			next_node = scm_get_next_node(scan_db,
-					&scan_db->scan_hash_tbl[i], cur_node);
-			cur_node = next_node;
-			next_node = NULL;
-		}
-	}
-
-	return false;
-}
-
 void scm_age_out_entries(struct wlan_objmgr_psoc *psoc,
 	struct scan_dbs *scan_db)
 {
@@ -551,9 +456,7 @@ void scm_age_out_entries(struct wlan_objmgr_psoc *psoc,
 		cur_node = scm_get_next_node(scan_db,
 			&scan_db->scan_hash_tbl[i], NULL);
 		while (cur_node) {
-			if (!scm_bss_is_connected(cur_node->entry) &&
-			    !scm_bss_is_nontx_of_conn_bss(cur_node->entry,
-							  scan_db))
+			if (!scm_bss_is_connected(cur_node->entry))
 				scm_check_and_age_out(scan_db, cur_node,
 					def_param->scan_cache_aging_time);
 			next_node = scm_get_next_node(scan_db,
@@ -962,40 +865,6 @@ static QDF_STATUS scm_add_update_entry(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
-#ifdef CONFIG_REG_CLIENT
-/**
- * scm_is_bss_allowed_for_country() - Check if bss is allowed to start for a
- * specific country and power mode (VLP?LPI/SP) for 6GHz.
- * @psoc: psoc ptr
- * @scan_entry: ptr to scan entry
- *
- * Return: True if allowed, False if not.
- */
-static bool scm_is_bss_allowed_for_country(struct wlan_objmgr_psoc *psoc,
-					   struct scan_cache_entry *scan_entry)
-{
-	struct wlan_country_ie *cc_ie;
-	uint8_t programmed_country[REG_ALPHA2_LEN + 1];
-
-	if (wlan_reg_is_6ghz_chan_freq(scan_entry->channel.chan_freq)) {
-		cc_ie = util_scan_entry_country(scan_entry);
-		wlan_reg_read_current_country(psoc, programmed_country);
-		if (cc_ie && qdf_mem_cmp(cc_ie->cc, programmed_country,
-					 REG_ALPHA2_LEN)) {
-			if (wlan_reg_is_us(programmed_country))
-				return false;
-		}
-	}
-	return true;
-}
-#else
-static bool scm_is_bss_allowed_for_country(struct wlan_objmgr_psoc *psoc,
-					   struct scan_cache_entry *scan_entry)
-{
-	return true;
-}
-#endif
-
 QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 {
 	struct wlan_objmgr_psoc *psoc;
@@ -1008,7 +877,6 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 	qdf_list_node_t *next_node = NULL;
 	struct scan_cache_node *scan_node;
 	struct wlan_frame_hdr *hdr = NULL;
-	struct wlan_crypto_params sec_params;
 
 	if (!bcn) {
 		scm_err("bcn is NULL");
@@ -1104,78 +972,11 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 			qdf_mem_free(scan_node);
 			continue;
 		}
-		if (wlan_cm_get_check_6ghz_security(psoc) &&
-		    wlan_reg_is_6ghz_chan_freq(scan_entry->channel.chan_freq)) {
-			if (!util_scan_entry_rsn(scan_entry)) {
-				scm_info("Drop frame from "QDF_MAC_ADDR_FMT
-					 ": No RSN IE for 6GHz AP",
-					 QDF_MAC_ADDR_REF(
-						 scan_entry->bssid.bytes));
-				util_scan_free_cache_entry(scan_entry);
-				qdf_mem_free(scan_node);
-				continue;
-			}
-			status = wlan_crypto_rsnie_check(&sec_params,
-					util_scan_entry_rsn(scan_entry));
-			if (QDF_IS_STATUS_ERROR(status)) {
-				scm_info("Drop frame from 6GHz AP "
-					 QDF_MAC_ADDR_FMT
-					 ": RSN IE parse failed, status %d",
-					 QDF_MAC_ADDR_REF(
-						 scan_entry->bssid.bytes),
-					 status);
-				util_scan_free_cache_entry(scan_entry);
-				qdf_mem_free(scan_node);
-				continue;
-			}
-			if ((QDF_HAS_PARAM(sec_params.ucastcipherset,
-					   WLAN_CRYPTO_CIPHER_NONE)) ||
-			    (QDF_HAS_PARAM(sec_params.ucastcipherset,
-					   WLAN_CRYPTO_CIPHER_TKIP)) ||
-			    (QDF_HAS_PARAM(sec_params.ucastcipherset,
-					   WLAN_CRYPTO_CIPHER_WEP_40)) ||
-			    (QDF_HAS_PARAM(sec_params.ucastcipherset,
-					   WLAN_CRYPTO_CIPHER_WEP_104))) {
-				scm_info("Drop frame from "QDF_MAC_ADDR_FMT
-					 ": Invalid sec type %0X for 6GHz AP",
-					 QDF_MAC_ADDR_REF(
-						 scan_entry->bssid.bytes),
-					 sec_params.ucastcipherset);
-				continue;
-			}
-			if (!wlan_cm_6ghz_allowed_for_akm(psoc,
-					sec_params.key_mgmt,
-					sec_params.rsn_caps,
-					util_scan_entry_rsnxe(scan_entry),
-					0, false)) {
-				scm_info("Drop frame from "QDF_MAC_ADDR_FMT
-					 ": Invalid AKM suite %0X for 6GHz AP",
-					 QDF_MAC_ADDR_REF(
-						scan_entry->bssid.bytes),
-					 sec_params.key_mgmt);
-				util_scan_free_cache_entry(scan_entry);
-				qdf_mem_free(scan_node);
-				continue;
-			}
-		}
 		if (scan_obj->cb.update_beacon)
 			scan_obj->cb.update_beacon(pdev, scan_entry);
 
-		/**
-		 * Do not drop the frame if Wi-Fi safe mode or RF test mode is
-		 * enabled. wlan_cm_get_check_6ghz_security API returns true if
-		 * neither Safe mode nor RF test mode are enabled.
-		 */
-		if (!scm_is_bss_allowed_for_country(psoc, scan_entry) &&
-		    wlan_cm_get_check_6ghz_security(psoc)) {
-			scm_info_rl(
-				"Drop frame from "QDF_MAC_ADDR_FMT
-				": AP in VLP mode not supported for US",
-				QDF_MAC_ADDR_REF(scan_entry->bssid.bytes));
-			util_scan_free_cache_entry(scan_entry);
-			qdf_mem_free(scan_node);
-			continue;
-		}
+		if (wlan_reg_11d_enabled_on_host(psoc))
+			scm_11d_handle_country_info(psoc, pdev, scan_entry);
 
 		status = scm_add_update_entry(psoc, pdev, scan_entry);
 		if (QDF_IS_STATUS_ERROR(status)) {
@@ -1214,6 +1015,82 @@ QDF_STATUS scm_handle_bcn_probe(struct scheduler_msg *msg)
 	}
 
 	return __scm_handle_bcn_probe(msg->bodyptr);
+}
+
+/**
+ * scm_list_insert_sorted() - add the entries in scan_list in sorted way
+ * @psoc: psoc ptr
+ * @filter: scan filter
+ * @scan_node: node entry to be inserted
+ * @scan_list: Temp scan list
+ *
+ * Add the entries in scan_list in sorted way considering
+ * cap_val and prefer val. The node is copy of original scan entry and
+ * thus no lock is required.
+ *
+ * Return: void
+ */
+static void scm_list_insert_sorted(struct wlan_objmgr_psoc *psoc,
+	struct scan_filter *filter,
+	struct scan_cache_node *scan_node,
+	qdf_list_t *scan_list)
+{
+	struct scan_cache_node *cur_node;
+	qdf_list_node_t *cur_lst = NULL, *next_lst = NULL;
+	struct scan_default_params *params;
+	int pcl_chan_weight = 0;
+
+	params = wlan_scan_psoc_get_def_params(psoc);
+	if (!params) {
+		scm_err("wlan_scan_psoc_get_def_params failed");
+		return;
+	}
+	if (filter->num_of_pcl_channels > 0 &&
+			(scan_node->entry->rssi_raw > SCM_PCL_RSSI_THRESHOLD)) {
+		if (scm_get_pcl_weight_of_channel(
+					scan_node->entry->channel.chan_freq,
+					filter, &pcl_chan_weight,
+					filter->pcl_weight_list)) {
+			scm_debug("pcl freq %d pcl_chan_weight %d",
+				  scan_node->entry->channel.chan_freq,
+				  pcl_chan_weight);
+		}
+	}
+	if (params->is_bssid_hint_priority &&
+	    !qdf_mem_cmp(filter->bssid_hint.bytes,
+			 scan_node->entry->bssid.bytes,
+			 QDF_MAC_ADDR_SIZE))
+		scan_node->entry->bss_score = BEST_CANDIDATE_MAX_BSS_SCORE;
+	else
+		scm_calculate_bss_score(psoc, params,
+					scan_node->entry, pcl_chan_weight);
+
+	if (qdf_list_empty(scan_list)) {
+		qdf_list_insert_front(scan_list, &scan_node->node);
+		return;
+	}
+
+	qdf_list_peek_front(scan_list, &cur_lst);
+
+	while (cur_lst) {
+		cur_node = qdf_container_of(cur_lst,
+				struct scan_cache_node, node);
+		if (scm_is_better_bss(params,
+		   scan_node->entry, cur_node->entry)) {
+			qdf_list_insert_before(scan_list,
+				&scan_node->node,
+				&cur_node->node);
+			break;
+		}
+		qdf_list_peek_next(scan_list,
+			cur_lst, &next_lst);
+		cur_lst = next_lst;
+		next_lst = NULL;
+	}
+
+	if (!cur_lst)
+		qdf_list_insert_back(scan_list,
+			&scan_node->node);
 }
 
 /**
@@ -1260,7 +1137,11 @@ scm_scan_apply_filter_get_entry(struct wlan_objmgr_psoc *psoc,
 	qdf_mem_copy(&scan_node->entry->neg_sec_info,
 		&security, sizeof(scan_node->entry->neg_sec_info));
 
-	qdf_list_insert_front(scan_list, &scan_node->node);
+	if (!filter || !filter->bss_scoring_required)
+		qdf_list_insert_front(scan_list,
+			&scan_node->node);
+	else
+		scm_list_insert_sorted(psoc, filter, scan_node, scan_list);
 
 	return QDF_STATUS_SUCCESS;
 }

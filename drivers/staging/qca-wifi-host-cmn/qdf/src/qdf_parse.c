@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -24,10 +24,6 @@
 #include "qdf_trace.h"
 #include "qdf_types.h"
 
-#include "wlan_hdd_misc.h"
-
-static char *wlan_cfg_buf;
-
 QDF_STATUS qdf_ini_parse(const char *ini_path, void *context,
 			 qdf_ini_item_cb item_cb, qdf_ini_section_cb section_cb)
 {
@@ -36,16 +32,10 @@ QDF_STATUS qdf_ini_parse(const char *ini_path, void *context,
 	char *cursor;
 	int ini_read_count = 0;
 
-	if (strcmp(ini_path, WLAN_INI_FILE) == 0) {
-		pr_info("qcacld: loading overridden WLAN_INI_FILE\n");
-		fbuf = wlan_cfg_buf;
-		status = QDF_STATUS_SUCCESS;
-	} else {
-		status = qdf_file_read(ini_path, &fbuf);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			qdf_err("Failed to read *.ini file @ %s", ini_path);
-			return status;
-		}
+	status = qdf_file_read(ini_path, &fbuf);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		qdf_err("Failed to read *.ini file @ %s", ini_path);
+		return status;
 	}
 
 	/* foreach line */
@@ -100,8 +90,6 @@ QDF_STATUS qdf_ini_parse(const char *ini_path, void *context,
 
 		key = qdf_str_trim(key);
 
-		pr_info("qcacld: cfg: \"%s\" = \"%s\"\n", key, value);
-
 		/*
 		 * Ignoring comments, a valid ini line contains one of:
 		 *	1) some 'key=value' config item
@@ -138,7 +126,7 @@ QDF_STATUS qdf_ini_parse(const char *ini_path, void *context,
 	if (ini_read_count != 0)
 		status = QDF_STATUS_SUCCESS;
 	else
-		status = QDF_STATUS_E_INVAL;
+		status = QDF_STATUS_E_FAILURE;
 
 free_fbuf:
 	qdf_file_buf_free(fbuf);
@@ -147,14 +135,3 @@ free_fbuf:
 }
 qdf_export_symbol(qdf_ini_parse);
 
-static int __init wlan_copy_ini_buf(void)
-{
-	#include "wlan_cfg_ini.h"
-
-	wlan_cfg_buf = kmalloc(sizeof(wlan_cfg), GFP_KERNEL);
-	memcpy(wlan_cfg_buf, wlan_cfg, sizeof(wlan_cfg));
-
-	return 0;
-}
-
-module_init(wlan_copy_ini_buf);

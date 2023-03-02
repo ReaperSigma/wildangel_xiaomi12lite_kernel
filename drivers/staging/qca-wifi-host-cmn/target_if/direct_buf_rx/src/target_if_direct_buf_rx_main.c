@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1024,11 +1023,6 @@ static QDF_STATUS target_if_dbr_replenish_ring(struct wlan_objmgr_pdev *pdev,
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	if (cookie >= mod_param->dbr_ring_cfg->num_ptr) {
-		direct_buf_rx_err("invalid cookie %d", cookie);
-		return QDF_STATUS_E_INVAL;
-	}
-
 	dbr_psoc_obj = wlan_objmgr_psoc_get_comp_private_obj(psoc,
 				WLAN_TARGET_IF_COMP_DIRECT_BUF_RX);
 
@@ -1509,11 +1503,6 @@ static void *target_if_dbr_vaddr_lookup(
 	struct direct_buf_rx_buf_info *dbr_buf_pool;
 
 	dbr_buf_pool = mod_param->dbr_buf_pool;
-
-	if (cookie >= mod_param->dbr_ring_cfg->num_ptr) {
-		direct_buf_rx_err("invalid cookie %d", cookie);
-		return NULL;
-	}
 
 	if (dbr_buf_pool[cookie].paddr == paddr) {
 		return dbr_buf_pool[cookie].vaddr +
@@ -2035,7 +2024,7 @@ QDF_STATUS target_if_deinit_dbr_ring(struct wlan_objmgr_pdev *pdev,
 QDF_STATUS target_if_direct_buf_rx_register_events(
 				struct wlan_objmgr_psoc *psoc)
 {
-	QDF_STATUS ret;
+	int ret;
 
 	if (!psoc || !GET_WMI_HDL_FROM_PSOC(psoc)) {
 		direct_buf_rx_err("psoc or psoc->tgt_if_handle is null");
@@ -2048,7 +2037,7 @@ QDF_STATUS target_if_direct_buf_rx_register_events(
 			target_if_direct_buf_rx_rsp_event_handler,
 			WMI_RX_UMAC_CTX);
 
-	if (QDF_IS_STATUS_ERROR(ret))
+	if (ret)
 		direct_buf_rx_debug("event handler not supported, ret=%d", ret);
 
 	return QDF_STATUS_SUCCESS;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -28,15 +28,12 @@
 
 #include "wlan_mgmt_txrx_utils_api.h"
 #include "wlan_objmgr_cmn.h"
-#include "wlan_objmgr_psoc_obj.h"
-#include "wlan_lmac_if_def.h"
 #include "qdf_list.h"
 
 
 #define IEEE80211_FC0_TYPE_MASK             0x0c
 #define IEEE80211_FC0_SUBTYPE_MASK          0xf0
 #define IEEE80211_FC0_TYPE_MGT              0x00
-#define IEEE80211_FC0_TYPE_CTL              0x04
 
 /**
  * mgmt_wakelock_reason - reasons mgmt_txrx might hold a wakelock
@@ -247,17 +244,4 @@ void wlan_mgmt_txrx_desc_put(
 			struct mgmt_txrx_priv_pdev_context *mgmt_txrx_pdev_ctx,
 			uint32_t desc_id);
 
-/**
- * iot_sim_mgmt_tx_update - invokes iot_sim callback to modify the frame
- * @psoc: psoc common object
- * @vdev: vdev object
- * @buf: frame buffer
- *
- * This function puts invokes iot_sim callback to modify the frame.
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS iot_sim_mgmt_tx_update(struct wlan_objmgr_psoc *psoc,
-				  struct wlan_objmgr_vdev *vdev,
-				  qdf_nbuf_t buf);
 #endif

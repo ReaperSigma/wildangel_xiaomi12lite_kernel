@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -90,7 +89,6 @@
 #define QCA6290_EMULATION_DEVICE_ID (0xabcd)
 #define QCA6290_DEVICE_ID (0x1100)
 #define QCN9000_DEVICE_ID (0x1104)
-#define QCN9100_DEVICE_ID (0xFFFB)
 #define QCA6390_EMULATION_DEVICE_ID (0x0108)
 #define QCA6390_DEVICE_ID (0x1101)
 /* TODO: change IDs for HastingsPrime */
@@ -115,7 +113,6 @@
 					emulation purpose */
 #define QCA8074V2_DEVICE_ID (0xfffe) /* Todo: replace this with actual number */
 #define QCA6018_DEVICE_ID (0xfffd) /* Todo: replace this with actual number */
-#define QCA5018_DEVICE_ID (0xfffc) /* Todo: replace this with actual number */
 /* Genoa */
 #define QCN7605_DEVICE_ID  (0x1102) /* Genoa PCIe device ID*/
 #define QCN7605_COMPOSITE  (0x9901)
@@ -144,22 +141,6 @@ struct hif_ce_stats {
 	int ce_ring_delta_fail_count;
 };
 
-#ifdef HIF_DETECTION_LATENCY_ENABLE
-struct hif_latency_detect {
-	qdf_timer_t detect_latency_timer;
-	uint32_t detect_latency_timer_timeout;
-	bool is_timer_started;
-	bool enable_detection;
-	/* threshold when stall happens */
-	uint32_t detect_latency_threshold;
-	int ce2_tasklet_sched_cpuid;
-	qdf_time_t ce2_tasklet_sched_time;
-	qdf_time_t ce2_tasklet_exec_time;
-	qdf_time_t credit_request_time;
-	qdf_time_t credit_report_time;
-};
-#endif
-
 /*
  * Note: For MCL, #if defined (HIF_CONFIG_SLUB_DEBUG_ON) needs to be checked
  * for defined here
@@ -167,7 +148,7 @@ struct hif_latency_detect {
 #if defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF)
 struct ce_desc_hist {
 	qdf_atomic_t history_index[CE_COUNT_MAX];
-	bool enable[CE_COUNT_MAX];
+	uint32_t enable[CE_COUNT_MAX];
 	bool data_enable[CE_COUNT_MAX];
 	qdf_mutex_t ce_dbg_datamem_lock[CE_COUNT_MAX];
 	uint32_t hist_index;
@@ -191,7 +172,6 @@ struct hif_softc {
 	struct hif_config_info hif_config;
 	struct hif_target_info target_info;
 	void __iomem *mem;
-	void __iomem *mem_ce;
 	enum qdf_bus_type bus_type;
 	struct hif_bus_ops bus_ops;
 	void *ce_id_to_state[CE_COUNT_MAX];
@@ -203,7 +183,7 @@ struct hif_softc {
 	/* Packet statistics */
 	struct hif_ce_stats pkt_stats;
 	enum hif_target_status target_status;
-	uint64_t event_enable_mask;
+	uint64_t event_disable_mask;
 
 	struct targetdef_s *targetdef;
 	struct ce_reg_def *target_ce_def;
@@ -247,16 +227,11 @@ struct hif_softc {
 	uint32_t hif_attribute;
 	int wake_irq;
 	int disable_wake_irq;
-	hif_pm_wake_irq_type wake_irq_type;
 	void (*initial_wakeup_cb)(void *);
 	void *initial_wakeup_priv;
 #ifdef REMOVE_PKT_LOG
 	/* Handle to pktlog device */
 	void *pktlog_dev;
-#endif
-#ifdef WLAN_FEATURE_DP_EVENT_HISTORY
-	/* Pointer to the srng event history */
-	struct hif_event_history *evt_hist[HIF_NUM_INT_CONTEXTS];
 #endif
 
 /*
@@ -270,30 +245,19 @@ struct hif_softc {
 	qdf_shared_mem_t *ipa_ce_ring;
 #endif
 	struct hif_cfg ini_cfg;
-#ifdef HIF_CE_LOG_INFO
-	qdf_notif_block hif_recovery_notifier;
-#endif
 #ifdef HIF_CPU_PERF_AFFINE_MASK
 	/* The CPU hotplug event registration handle */
 	struct qdf_cpuhp_handler *cpuhp_event_handle;
 #endif
-	uint32_t irq_unlazy_disable;
-	/* Should the unlzay support for interrupt delivery be disabled */
-	/* Flag to indicate whether bus is suspended */
-	bool bus_suspended;
+#ifdef HIF_CE_LOG_INFO
+	qdf_notif_block hif_recovery_notifier;
+#endif
 #ifdef FEATURE_RUNTIME_PM
 	/* Variable to track the link state change in RTPM */
 	qdf_atomic_t pm_link_state;
 #endif
-#ifdef HIF_DETECTION_LATENCY_ENABLE
-	struct hif_latency_detect latency_detect;
-#endif
 #ifdef SYSTEM_PM_CHECK
 	qdf_atomic_t sys_pm_state;
-#endif
-#if defined(HIF_IPCI) && defined(FEATURE_HAL_DELAYED_REG_WRITE)
-	qdf_atomic_t dp_ep_vote_access;
-	qdf_atomic_t ep_vote_access;
 #endif
 };
 
@@ -306,18 +270,6 @@ void *hif_get_hal_handle(struct hif_opaque_softc *hif_hdl)
 		return NULL;
 
 	return sc->hal_soc;
-}
-
-/**
- * hif_get_num_active_tasklets() - get the number of active
- *		tasklets pending to be completed.
- * @scn: HIF context
- *
- * Returns: the number of tasklets which are active
- */
-static inline int hif_get_num_active_tasklets(struct hif_softc *scn)
-{
-	return qdf_atomic_read(&scn->active_tasklet_cnt);
 }
 
 /**
@@ -362,7 +314,7 @@ static inline void hif_set_event_hist_mask(struct hif_opaque_softc *hif_handle)
 {
 	struct hif_softc *scn = (struct hif_softc *)hif_handle;
 
-	scn->event_enable_mask = HIF_EVENT_HIST_ENABLE_MASK;
+	scn->event_disable_mask = HIF_EVENT_HIST_DISABLE_MASK;
 }
 #else
 static inline void hif_set_event_hist_mask(struct hif_opaque_softc *hif_handle)
@@ -383,16 +335,8 @@ void hif_unconfig_ce(struct hif_softc *scn);
 void hif_ce_prepare_config(struct hif_softc *scn);
 QDF_STATUS hif_ce_open(struct hif_softc *scn);
 void hif_ce_close(struct hif_softc *scn);
-#if defined(CONFIG_ATH_PROCFS_DIAG_SUPPORT)
 int athdiag_procfs_init(void *scn);
 void athdiag_procfs_remove(void);
-#else
-static inline int athdiag_procfs_init(void *scn)
-{
-	return 0;
-}
-static inline void athdiag_procfs_remove(void) {}
-#endif
 /* routine to modify the initial buffer count to be allocated on an os
  * platform basis. Platform owner will need to modify this as needed
  */
@@ -410,10 +354,6 @@ QDF_STATUS hif_bus_open(struct hif_softc *ol_sc,
 QDF_STATUS hif_enable_bus(struct hif_softc *ol_sc, struct device *dev,
 	void *bdev, const struct hif_bus_id *bid, enum hif_enable_type type);
 void hif_disable_bus(struct hif_softc *scn);
-#ifdef FEATURE_RUNTIME_PM
-struct hif_runtime_pm_ctx *hif_bus_get_rpm_ctx(struct hif_softc *hif_sc);
-struct device *hif_bus_get_dev(struct hif_softc *hif_sc);
-#endif
 void hif_bus_prevent_linkdown(struct hif_softc *scn, bool flag);
 int hif_bus_get_context_size(enum qdf_bus_type bus_type);
 void hif_read_phy_mem_base(struct hif_softc *scn, qdf_dma_addr_t *bar_value);

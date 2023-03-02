@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -99,41 +98,6 @@ cdp_update_filter_neighbour_peers(ol_txrx_soc_handle soc,
 			(soc, vdev_id, cmd, macaddr);
 }
 #endif /* ATH_SUPPORT_NAC || ATH_SUPPORT_NAC_RSSI*/
-
-#ifdef WLAN_SUPPORT_MSCS
-/**
- * @brief record the MSCS data and send it to the Data path
- * @details
- *  This defines interface function to record the MSCS procedure
- *  based data parameters so that the data path layer can access it
- *
- * @param soc - the pointer to soc object
- * @param vdev_id - id of the pointer to vdev
- * @param macaddr - the address of neighbour peer
- * @param mscs_params - Structure having MSCS params
- * obtained from handshake
- * @return - QDF_STATUS
- */
-static inline QDF_STATUS
-cdp_record_vdev_mscs_params(ol_txrx_soc_handle soc, uint8_t
-		*macaddr, uint8_t vdev_id, struct cdp_mscs_params *mscs_params,
-		bool active)
-{
-	if (!soc || !soc->ops) {
-		QDF_TRACE(QDF_MODULE_ID_CDP, QDF_TRACE_LEVEL_DEBUG,
-			  "%s: Invalid Instance:",
-			  __func__);
-		QDF_BUG(0);
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	if (!soc->ops->ctrl_ops ||
-	    !soc->ops->ctrl_ops->txrx_record_mscs_params)
-		return QDF_STATUS_E_FAILURE;
-	return soc->ops->ctrl_ops->txrx_record_mscs_params
-			(soc, macaddr, vdev_id, mscs_params, active);
-}
-#endif
 
 /**
  * @brief set the Reo Destination ring for the pdev
@@ -1020,7 +984,7 @@ static inline QDF_STATUS
 cdp_update_peer_pkt_capture_params(ol_txrx_soc_handle soc,
 				   uint8_t pdev_id,
 				   bool is_rx_pkt_cap_enable,
-				   uint8_t is_tx_pkt_cap_enable,
+				   bool is_tx_pkt_cap_enable,
 				   uint8_t *peer_mac)
 {
 	if (!soc || !soc->ops) {
@@ -1035,7 +999,8 @@ cdp_update_peer_pkt_capture_params(ol_txrx_soc_handle soc,
 
 	return soc->ops->ctrl_ops->txrx_update_peer_pkt_capture_params
 			(soc, pdev_id, is_rx_pkt_cap_enable,
-			 is_tx_pkt_cap_enable, peer_mac);
+			 is_tx_pkt_cap_enable,
+			 peer_mac);
 }
 #endif /* WLAN_TX_PKT_CAPTURE_ENH || WLAN_RX_PKT_CAPTURE_ENH */
 
@@ -1218,86 +1183,4 @@ cdp_dump_rx_flow_tag_stats(ol_txrx_soc_handle soc, uint8_t pdev_id,
 								flow_info);
 }
 #endif /* WLAN_SUPPORT_RX_FLOW_TAG */
-
-#ifdef WLAN_FEATURE_TSF_UPLINK_DELAY
-/**
- * cdp_set_delta_tsf() - wrapper function to set delta_tsf
- * @soc: SOC TXRX handle
- * @vdev_id: vdev id
- * @delta_tsf: difference between TSF clock and qtimer
- *
- * Return: None
- */
-static inline void cdp_set_delta_tsf(ol_txrx_soc_handle soc, uint8_t vdev_id,
-				     uint32_t delta_tsf)
-{
-	if (!soc || !soc->ops) {
-		dp_cdp_err("Invalid instance");
-		QDF_BUG(0);
-		return;
-	}
-
-	if (!soc->ops->ctrl_ops ||
-	    !soc->ops->ctrl_ops->txrx_set_delta_tsf)
-		return;
-
-	soc->ops->ctrl_ops->txrx_set_delta_tsf(soc, vdev_id, delta_tsf);
-}
-
-/**
- * cdp_set_tsf_ul_delay_report() - Enable or disable reporting uplink delay
- * @soc: SOC TXRX handle
- * @vdev_id: vdev id
- * @enable: true to enable and false to disable
- *
- * Return: QDF_STATUS
- */
-static inline QDF_STATUS cdp_set_tsf_ul_delay_report(ol_txrx_soc_handle soc,
-						     uint8_t vdev_id,
-						     bool enable)
-{
-	if (!soc || !soc->ops) {
-		dp_cdp_err("Invalid SOC instance");
-		QDF_BUG(0);
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	if (!soc->ops->ctrl_ops ||
-	    !soc->ops->ctrl_ops->txrx_set_tsf_ul_delay_report)
-		return QDF_STATUS_E_FAILURE;
-
-	return soc->ops->ctrl_ops->txrx_set_tsf_ul_delay_report(soc, vdev_id,
-								enable);
-}
-
-/**
- * cdp_get_uplink_delay() - Get uplink delay value
- * @soc: SOC TXRX handle
- * @vdev_id: vdev id
- * @val: pointer to save uplink delay value
- *
- * Return: QDF_STATUS
- */
-static inline QDF_STATUS cdp_get_uplink_delay(ol_txrx_soc_handle soc,
-					      uint32_t vdev_id, uint32_t *val)
-{
-	if (!soc || !soc->ops) {
-		dp_cdp_err("Invalid SOC instance");
-		QDF_BUG(0);
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	if (!val) {
-		dp_cdp_err("Invalid params val");
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	if (!soc->ops->ctrl_ops ||
-	    !soc->ops->ctrl_ops->txrx_get_uplink_delay)
-		return QDF_STATUS_E_FAILURE;
-
-	return soc->ops->ctrl_ops->txrx_get_uplink_delay(soc, vdev_id, val);
-}
-#endif /* WLAN_FEATURE_TSF_UPLINK_DELAY */
-
 #endif /* _CDP_TXRX_CTRL_H_ */

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2021 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -34,6 +34,7 @@
 #define SCAN_GET_HASH(addr) \
 	(((const uint8_t *)(addr))[QDF_MAC_ADDR_SIZE - 1] % SCAN_HASH_SIZE)
 
+#define SCM_PCL_RSSI_THRESHOLD -75
 #define ADJACENT_CHANNEL_RSSI_THRESHOLD -80
 
 /**
@@ -249,24 +250,6 @@ QDF_STATUS scm_rnr_db_flush(struct wlan_objmgr_psoc *psoc);
  */
 void scm_update_rnr_from_scan_cache(struct wlan_objmgr_pdev *pdev);
 
-/**
- * scm_filter_rnr_flag_pno() - Remove FLAG_SCAN_ONLY_IF_RNR_FOUND flag
- *                             in channel if ssid is different for colocated AP,
- *                             during pno scan request
- * @vdev: vdev
- * @short_ssid: short ssid
- * @pno_chan_list: channel list
- *
- * Remove FLAG_SCAN_ONLY_IF_RNR_FOUND flag in channel if ssid is different for
- * colocated AP, in pno scan request
- *
- * Return: None
- */
-void
-scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
-			uint32_t short_ssid,
-			struct chan_list *chan_list);
-
 #else
 static inline QDF_STATUS scm_channel_list_db_init(struct wlan_objmgr_psoc *psoc)
 {
@@ -278,14 +261,16 @@ QDF_STATUS scm_channel_list_db_deinit(struct wlan_objmgr_psoc *psoc)
 {
 	return QDF_STATUS_SUCCESS;
 }
-
-static inline void
-scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
-			uint32_t short_ssid,
-			struct chan_list *chan_list)
-{
-}
 #endif
+
+/**
+ * scm_validate_scoring_config() - validate score config
+ * @score_cfg: config to be validated
+ *
+ * Return: void
+ */
+void scm_validate_scoring_config(
+			struct scoring_config *score_cfg);
 
 /**
  * scm_scan_update_mlme_by_bssinfo() - updates scan entry with mlme data

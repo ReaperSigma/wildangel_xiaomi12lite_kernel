@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2019-2020 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -43,7 +43,7 @@ send_set_elna_bypass_cmd_tlv(wmi_unified_t wmi_handle,
 
 	buf = wmi_buf_alloc(wmi_handle, len);
 	if (!buf) {
-		wmi_err("Failed to allocate wmi buffer");
+		WMI_LOGE("%s: Failed to allocate wmi buffer", __func__);
 		return QDF_STATUS_E_NOMEM;
 	}
 
@@ -58,7 +58,7 @@ send_set_elna_bypass_cmd_tlv(wmi_unified_t wmi_handle,
 	ret = wmi_unified_cmd_send(wmi_handle, buf, len,
 				   WMI_SET_ELNA_BYPASS_CMDID);
 	if (QDF_IS_STATUS_ERROR(ret)) {
-		wmi_err("Failed to send set param command ret = %d", ret);
+		WMI_LOGE("Failed to send set param command ret = %d", ret);
 		wmi_buf_free(buf);
 	}
 
@@ -85,7 +85,7 @@ send_get_elna_bypass_cmd_tlv(wmi_unified_t wmi_handle,
 
 	buf = wmi_buf_alloc(wmi_handle, len);
 	if (!buf) {
-		wmi_err("Failed to allocate wmi buffer");
+		WMI_LOGE("%s: Failed to allocate wmi buffer", __func__);
 		return QDF_STATUS_E_NOMEM;
 	}
 
@@ -99,7 +99,7 @@ send_get_elna_bypass_cmd_tlv(wmi_unified_t wmi_handle,
 	ret = wmi_unified_cmd_send(wmi_handle, buf, len,
 				   WMI_GET_ELNA_BYPASS_CMDID);
 	if (QDF_IS_STATUS_ERROR(ret)) {
-		wmi_err("Failed to send set param command ret = %d", ret);
+		WMI_LOGE("Failed to send set param command ret = %d", ret);
 		wmi_buf_free(buf);
 	}
 
@@ -126,11 +126,11 @@ extract_get_elna_bypass_resp_tlv(struct wmi_unified *wmi_handle, void *resp_buf,
 	param_buf = resp_buf;
 	evt = param_buf->fixed_param;
 	if (!evt) {
-		wmi_err("Invalid get elna bypass event");
+		WMI_LOGE("Invalid get elna bypass event");
 		return QDF_STATUS_E_INVAL;
 	}
 
-	wmi_debug("Get elna bypass %d from vdev %d", evt->en_dis, evt->vdev_id);
+	WMI_LOGD("Get elna bypass %d from vdev %d", evt->en_dis, evt->vdev_id);
 
 	resp->vdev_id = evt->vdev_id;
 	resp->en_dis = evt->en_dis;
@@ -173,7 +173,7 @@ send_dscp_tid_map_cmd_tlv(wmi_unified_t wmi_handle,
 
 	buf = wmi_buf_alloc(wmi_handle, len);
 	if (!buf) {
-		wmi_err("Failed to allocate wmi buffer");
+		WMI_LOGE("%s: Failed to allocate wmi buffer", __func__);
 		return QDF_STATUS_E_NOMEM;
 	}
 
@@ -190,7 +190,7 @@ send_dscp_tid_map_cmd_tlv(wmi_unified_t wmi_handle,
 	status = wmi_unified_cmd_send(wmi_handle, buf, len,
 				      WMI_PDEV_SET_DSCP_TID_MAP_CMDID);
 	if (status) {
-		wmi_err("Failed to send dscp_up_map_to_fw %d", status);
+		WMI_LOGE("Failed to send dscp_up_map_to_fw %d", status);
 		wmi_buf_free(buf);
 	}
 
@@ -207,65 +207,11 @@ static void wmi_fwol_attach_dscp_tid_tlv(struct wmi_ops *ops)
 }
 #endif /* WLAN_SEND_DSCP_UP_MAP_TO_FW */
 
-#ifdef THERMAL_STATS_SUPPORT
-/**
- * send_get_thermal_stats_cmd_tlv() - send get thermal stats cmd to fw
- * @wmi_handle: wmi handle
- * @req_type: req type
- * @temp_offset: temperature offset
- *
- * Send WMI_REQUEST_THERMAL_STATS_CMDID to fw.
- *
- * Return: QDF_STATUS
- */
-static QDF_STATUS
-send_get_thermal_stats_cmd_tlv(wmi_unified_t wmi_handle,
-			       enum thermal_stats_request_type req_type,
-			       uint8_t temp_offset)
-{
-	wmi_buf_t buf;
-	wmi_thermal_stats_cmd_fixed_param *cmd;
-	uint16_t len = sizeof(*cmd);
-	QDF_STATUS ret;
-
-	buf = wmi_buf_alloc(wmi_handle, len);
-	if (!buf) {
-		wmi_err("Failed to allocate wmi buffer");
-		return QDF_STATUS_E_NOMEM;
-	}
-
-	cmd = (wmi_thermal_stats_cmd_fixed_param *)wmi_buf_data(buf);
-	WMITLV_SET_HDR(&cmd->tlv_header,
-		       WMITLV_TAG_STRUC_wmi_thermal_stats_cmd_fixed_param,
-		       WMITLV_GET_STRUCT_TLVLEN
-		       (wmi_thermal_stats_cmd_fixed_param));
-	cmd->thermal_action = req_type;
-	cmd->thermal_offset = temp_offset;
-	ret = wmi_unified_cmd_send(wmi_handle, buf, len,
-				   WMI_REQUEST_THERMAL_STATS_CMDID);
-	if (QDF_IS_STATUS_ERROR(ret)) {
-		wmi_err("Failed to send get thermal stats cmd = %d", ret);
-		wmi_buf_free(buf);
-	}
-
-	return ret;
-}
-
-static void wmi_fwol_attach_thermal_stats_tlv(struct wmi_ops *ops)
-{
-	ops->send_get_thermal_stats_cmd = send_get_thermal_stats_cmd_tlv;
-}
-#else
-static void wmi_fwol_attach_thermal_stats_tlv(struct wmi_ops *ops)
-{
-}
-#endif /* THERMAL_STATS_SUPPORT */
-
 void wmi_fwol_attach_tlv(wmi_unified_t wmi_handle)
 {
 	struct wmi_ops *ops = wmi_handle->ops;
 
 	wmi_fwol_attach_elna_tlv(ops);
 	wmi_fwol_attach_dscp_tid_tlv(ops);
-	wmi_fwol_attach_thermal_stats_tlv(ops);
+
 }
