@@ -1,8 +1,20 @@
 ifneq ($(CONFIG_ARCH_QTI_VM), y)
+ifeq ($(filter y, $(CONFIG_ARCH_SHIMA) $(CONFIG_ARCH_YUPIK)),)
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 dtbo-$(CONFIG_ARCH_LAHAINA) += lahaina-rumi-overlay.dtbo \
+	lahaina-mtp-overlay.dtbo \
+	lahaina-mtp-hsp-overlay.dtbo \
+	lahaina-cdp-overlay.dtbo \
+	lahaina-qrd-overlay.dtbo \
+	lahaina-atp-overlay.dtbo \
+	lahaina-hdk-overlay.dtbo \
+	lahaina-hhg-overlay.dtbo \
+	lahainap-hhg-hsp-pro-overlay.dtbo \
+	lahaina-qrd-hsp-overlay.dtbo \
+	lahaina-qrd-module-overlay.dtbo \
 	lahainap-mtp-overlay.dtbo \
 	lahainap-cdp-overlay.dtbo \
+	lahainap-atp-overlay.dtbo \
 	lahainap-qrd-overlay.dtbo \
 	lahaina-cdp-v2.2-overlay.dtbo \
 	lahaina-mtp-v2-overlay.dtbo \
@@ -12,8 +24,19 @@ dtbo-$(CONFIG_ARCH_LAHAINA) += lahaina-rumi-overlay.dtbo \
 	lahaina-qrd-hsp-pro-overlay.dtbo
 
 lahaina-rumi-overlay.dtbo-base := lahaina.dtb
+lahaina-mtp-hsp-overlay.dtbo-base := lahaina.dtb
+lahaina-mtp-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb lahaina-v2.1.dtb
+lahaina-cdp-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb lahaina-v2.1.dtb
+lahaina-atp-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb lahaina-v2.1.dtb
+lahaina-hdk-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb lahaina-v2.1.dtb
+lahaina-hhg-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb lahaina-v2.1.dtb
+lahainap-hhg-hsp-pro-overlay.dtbo-base := lahainap.dtb lahainap-v2.dtb lahainap-v2.1.dtb
+lahaina-qrd-hsp-overlay.dtbo-base := lahaina.dtb
+lahaina-qrd-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb lahaina-v2.1.dtb
+lahaina-qrd-module-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb lahaina-v2.1.dtb
 lahainap-mtp-overlay.dtbo-base := lahainap.dtb lahainap-v2.dtb lahainap-v2.1.dtb
 lahainap-cdp-overlay.dtbo-base := lahainap.dtb lahainap-v2.dtb lahainap-v2.1.dtb
+lahainap-atp-overlay.dtbo-base := lahainap.dtb lahainap-v2.dtb lahainap-v2.1.dtb
 lahainap-qrd-overlay.dtbo-base := lahainap.dtb lahainap-v2.dtb lahainap-v2.1.dtb
 lahaina-cdp-v2.2-overlay.dtbo-base := lahaina.dtb lahaina-v2.dtb \
 					lahaina-v2.1.dtb
@@ -69,6 +92,7 @@ dtb-$(CONFIG_ARCH_LAHAINA) += lahaina-rumi.dtb \
 	lahaina-v2.1-mtp-hsp-pro.dts \
 	lahaina-v2.1-cdp-hsp-pro.dts \
 	lahaina-v2.1-qrd-hsp-pro.dts
+endif
 endif
 
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
@@ -177,22 +201,10 @@ dtb-$(CONFIG_ARCH_SHIMA) += shima-rumi.dtb  \
 endif
 
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
-dtbo-$(CONFIG_ARCH_YUPIK) +=    \
-	taoyao-sm7325-overlay.dtbo \
-	yupik-idp-overlay.dtbo \
-	yupik-idp-pm7250b-overlay.dtbo \
-	yupikp-idp-overlay.dtbo \
-	yupikp-atp-overlay.dtbo \
-	yupikp-qrd-overlay.dtbo \
-	yupikp-idps-amoled-overlay.dtbo \
+dtbo-$(CONFIG_ARCH_YUPIK) += \
+	taoyao-sm7325-overlay.dtbo
 
 taoyao-sm7325-overlay.dtbo-base := yupik.dtb
-yupik-idp-overlay.dtbo-base := yupik.dtb
-yupik-idp-pm7250b-overlay.dtbo-base := yupik.dtb
-yupikp-idp-overlay.dtbo-base := yupikp.dtb
-yupikp-atp-overlay.dtbo-base := yupikp.dtb
-yupikp-qrd-overlay.dtbo-base := yupikp.dtb
-yupikp-idps-amoled-overlay.dtbo-base := yupikp.dtb
 else
 dtb-$(CONFIG_ARCH_YUPIK) += yupik-rumi.dtb \
 	yupik-idp.dtb \
@@ -200,6 +212,7 @@ dtb-$(CONFIG_ARCH_YUPIK) += yupik-rumi.dtb \
 	yupik-qrd.dtb \
 	yupik-idps-amoled.dtb \
 	yupik-idp-pm7250b.dtb \
+	yupik-idp-hsp.dtb \
 	yupikp-idp.dtb \
 	yupikp-atp.dtb \
 	yupikp-qrd.dtb \
