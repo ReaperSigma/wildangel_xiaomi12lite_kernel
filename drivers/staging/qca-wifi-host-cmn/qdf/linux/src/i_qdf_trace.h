@@ -339,8 +339,6 @@ static inline void qdf_vprint(const char *fmt, va_list args)
 }
 #endif
 
-#ifdef PANIC_ON_BUG
-#ifdef CONFIG_SLUB_DEBUG
 /**
  * __qdf_bug() - Calls BUG() when the PANIC_ON_BUG compilation option is enabled
  *
@@ -372,13 +370,11 @@ static inline void qdf_vprint(const char *fmt, va_list args)
  *
  * Return: None
  */
-void __qdf_bug(void);
-#else /* CONFIG_SLUB_DEBUG */
+
 static inline void __qdf_bug(void)
 {
 	BUG();
 }
-#endif /* CONFIG_SLUB_DEBUG */
 
 /**
  * QDF_DEBUG_PANIC() - In debug builds, panic, otherwise do nothing
@@ -421,33 +417,28 @@ static inline void __qdf_bug(void)
 		} \
 	} while (0)
 
-#else /* PANIC_ON_BUG */
 
-#define QDF_DEBUG_PANIC(reason...) \
+/*#define QDF_DEBUG_PANIC(reason...) \
 	do { \
-		/* no-op */ \
 	} while (false)
 
 #define QDF_DEBUG_PANIC_FL(func, line, fmt, args...) \
 	do { \
-		/* no-op */ \
 	} while (false)
 
 #define QDF_BUG(_condition) \
 	do { \
 		if (!(_condition)) { \
-			/* no-op */ \
 		} \
 	} while (0)
 
 #define QDF_BUG_ON_ASSERT(_condition) \
 	do { \
 		if (!(_condition)) { \
-			/* no-op */ \
+ \
 		} \
-	} while (0)
-
-#endif /* PANIC_ON_BUG */
+	}
+*/
 
 #ifdef KSYM_SYMBOL_LEN
 #define __QDF_SYMBOL_LEN KSYM_SYMBOL_LEN

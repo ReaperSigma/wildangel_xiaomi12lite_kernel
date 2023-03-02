@@ -120,7 +120,7 @@ enum mgmt_subtype {
  *                                             action category
  * @ACTION_CATEGORY_VENDOR_SPECIFIC: vendor specific action category
  */
-enum mgmt_action_category {
+/*enum mgmt_action_category {
 	ACTION_CATEGORY_SPECTRUM_MGMT = 0,
 	ACTION_CATEGORY_QOS = 1,
 	ACTION_CATEGORY_DLS = 2,
@@ -146,7 +146,43 @@ enum mgmt_action_category {
 	ACTION_CATEGORY_USIG = 22,
 	ACTION_CATEGORY_VENDOR_SPECIFIC_PROTECTED = 126,
 	ACTION_CATEGORY_VENDOR_SPECIFIC = 127,
+};*/
+
+enum mgmt_action_category {
+	ACTION_CATEGORY_SPECTRUM_MGMT = 0,
+	ACTION_CATEGORY_QOS = 1,
+	ACTION_CATEGORY_DLS = 2,
+	ACTION_CATEGORY_BACK = 3,
+	ACTION_CATEGORY_PUBLIC = 4,
+	ACTION_CATEGORY_RRM = 5,
+	ACTION_FAST_BSS_TRNST = 6,
+	ACTION_CATEGORY_HT = 7,
+	ACTION_CATEGORY_SA_QUERY = 8,
+	ACTION_CATEGORY_PROTECTED_DUAL_OF_PUBLIC_ACTION = 9,
+	ACTION_CATEGORY_WNM = 10,
+	ACTION_CATEGORY_WNM_UNPROTECTED = 11,
+	ACTION_CATEGORY_TDLS = 12,
+	ACTION_CATEGORY_MESH_ACTION = 13,
+	ACTION_CATEGORY_MULTIHOP_ACTION = 14,
+	ACTION_CATEGORY_SELF_PROTECTED = 15,
+	ACTION_CATEGORY_DMG = 16,
+	ACTION_CATEGORY_WMM = 17,
+	ACTION_CATEGORY_FST = 18,
+	ACTION_CATEGORY_RVS = 19,
+	ACTION_CATEGORY_UNPROT_DMG = 20,
+	ACTION_CATEGORY_VHT = 21,
+	ACTION_CATEGORY_USIG = 22,
+	ACTION_CATEGORY_SIG = 23,
+	ACTION_CATEGORY_FLOW_CONTROL = 24,
+	ACTION_CATEGORY_CONTROL_RSP_MCS_NEGO = 25,
+	ACTION_CATEGORY_FILS = 26,
+	ACTION_CATEGORY_CDMG = 27,
+	ACTION_CATEGORY_CMMG = 28,
+	ACTION_CATEGORY_GLK = 29,
+	ACTION_CATEGORY_VENDOR_SPECIFIC_PROTECTED = 126,
+	ACTION_CATEGORY_VENDOR_SPECIFIC = 127,
 };
+
 
 /**
  * enum spectrum_mgmt_actioncode - spectrum mgmt. action frms
@@ -909,6 +945,9 @@ QDF_STATUS wlan_mgmt_txrx_mgmt_frame_tx(struct wlan_objmgr_peer *peer,
 					mgmt_ota_comp_cb tx_ota_comp_cb,
 					enum wlan_umac_comp_id comp_id,
 					void *mgmt_tx_params);
+
+
+bool wlan_mgmt_is_rmf_mgmt_action_frame(uint8_t action_category);
 
 /**
  * wlan_mgmt_txrx_beacon_frame_tx() - transmits mgmt. beacon
