@@ -35,6 +35,8 @@ void psi_trigger_replace(void **trigger_ptr, struct psi_trigger *t);
 
 __poll_t psi_trigger_poll(void **trigger_ptr, struct file *file,
 			poll_table *wait);
+
+void psi_trigger_destroy(struct psi_trigger *t);
 #endif
 
 #else /* CONFIG_PSI */

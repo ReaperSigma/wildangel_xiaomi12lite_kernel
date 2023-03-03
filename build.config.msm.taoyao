@@ -1,0 +1,46 @@
+################################################################################
+## Defaulting required variables
+[ -z "${VARIANT}" ] && VARIANT=qgki
+[ -z "${CONFIG_TARGET}" ] && CONFIG_TARGET=msm.taoyao
+
+[ -z "${KERNEL_DIR}" ] && KERNEL_DIR=msm-kernel
+
+################################################################################
+## Inheriting configs from ACK
+_KERNEL_DIR=${KERNEL_DIR}
+. ${KERNEL_DIR}/build.config.common
+KERNEL_DIR=${_KERNEL_DIR}
+. ${KERNEL_DIR}/build.config.aarch64
+
+################################################################################
+## Variant setup
+MSM_ARCH=taoyao
+VARIANTS=(qgki-debug qgki-consolidate qgki gki gki-only)
+
+DT_OVERLAY_SUPPORT=1
+
+BOOT_IMAGE_HEADER_VERSION=4
+BASE_ADDRESS=0x80000000
+PAGE_SIZE=4096
+
+BUILD_INITRAMFS=1
+
+VENDOR_RAMDISK_BINARY=ramdisk.gz
+KERNEL_BINARY=Image
+
+################################################################################
+## Inheriting MSM configs
+. ${KERNEL_DIR}/build.config.msm.common
+
+case "${VARIANT}" in
+qgki-debug | qgki-consolidate | qgki | gki)
+	. ${KERNEL_DIR}/build.config.msm.gki
+	;;
+gki-only)
+	# In gki-only, then using ACK's GKI config directly
+	. ${KERNEL_DIR}/build.config.gki
+	;;
+*)
+	echo "Unsupported variant '${VARIANT}'"
+	;;
+esac

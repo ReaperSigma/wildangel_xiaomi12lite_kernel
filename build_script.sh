@@ -24,6 +24,7 @@ if [[ $USER == "$USER_OVERRIDE" ]]; then
 fi
 
 export TARGET_PRODUCT=taoyao
+export WLAN_POWER_DEBUG=0
 #############################
 TOOLCHAIN="3"               #
 # 1) gcc-4.9                #

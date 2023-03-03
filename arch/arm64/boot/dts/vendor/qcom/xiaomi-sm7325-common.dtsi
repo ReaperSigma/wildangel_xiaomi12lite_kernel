@@ -406,7 +406,7 @@
 	focaltech@0 {
 		compatible = "focaltech,fts_ts";
 		reg = <0x0>;
-		spi-max-frequency = <6000000>;
+		spi-max-frequency = <15000000>;
 		interrupt-parent = <&tlmm>;
 		interrupts = <81 0x2008>;
 		focaltech,reset-gpio = <&tlmm 105 0x00>;
