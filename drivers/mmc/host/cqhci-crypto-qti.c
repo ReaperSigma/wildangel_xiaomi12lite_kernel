@@ -18,10 +18,6 @@
 #include "sdhci-pltfm.h"
 #include "cqhci-crypto-qti.h"
 #include <linux/crypto-qti-common.h>
-#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
-#include "../core/queue.h"
-#endif
-#include <linux/pm_runtime.h>
 
 #define RAW_SECRET_SIZE 32
 #define MINIMUM_DUN_SIZE 512
@@ -34,10 +30,6 @@ static struct cqhci_host_crypto_variant_ops __maybe_unused cqhci_crypto_qti_vari
 	.resume = cqhci_crypto_qti_resume,
 	.debug = cqhci_crypto_qti_debug,
 	.recovery_finish = cqhci_crypto_qti_recovery_finish,
-	.restore_from_hibernation = cqhci_crypto_qti_restore_from_hibernation,
-#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
-	.prepare_crypto_desc = cqhci_crypto_qti_prep_desc,
-#endif
 };
 
 static bool ice_cap_idx_valid(struct cqhci_host *host,
@@ -55,6 +47,7 @@ static uint8_t get_data_unit_size_mask(unsigned int data_unit_size)
 
 	return data_unit_size / MINIMUM_DUN_SIZE;
 }
+
 
 void cqhci_crypto_qti_enable(struct cqhci_host *host)
 {
@@ -90,12 +83,10 @@ static int cqhci_crypto_qti_keyslot_program(struct keyslot_manager *ksm,
 
 	crypto_alg_id = cqhci_crypto_cap_find(host, key->crypto_mode,
 					       key->data_unit_size);
-	pm_runtime_get_sync(&host->mmc->card->dev);
 
 	if (!cqhci_is_crypto_enabled(host) ||
 	    !cqhci_keyslot_valid(host, slot) ||
 	    !ice_cap_idx_valid(host, crypto_alg_id)) {
-		pm_runtime_put_sync(&host->mmc->card->dev);
 		return -EINVAL;
 	}
 
@@ -103,7 +94,6 @@ static int cqhci_crypto_qti_keyslot_program(struct keyslot_manager *ksm,
 
 	if (!(data_unit_mask &
 	      host->crypto_cap_array[crypto_alg_id].sdus_mask)) {
-		pm_runtime_put_sync(&host->mmc->card->dev);
 		return -EINVAL;
 	}
 
@@ -111,8 +101,6 @@ static int cqhci_crypto_qti_keyslot_program(struct keyslot_manager *ksm,
 					 slot, data_unit_mask, crypto_alg_id);
 	if (err)
 		pr_err("%s: failed with error %d\n", __func__, err);
-
-	pm_runtime_put_sync(&host->mmc->card->dev);
 
 	return err;
 }
@@ -124,18 +112,13 @@ static int cqhci_crypto_qti_keyslot_evict(struct keyslot_manager *ksm,
 	int err = 0;
 	struct cqhci_host *host = keyslot_manager_private(ksm);
 
-	pm_runtime_get_sync(&host->mmc->card->dev);
-
 	if (!cqhci_is_crypto_enabled(host) ||
 	    !cqhci_keyslot_valid(host, slot))
-		pm_runtime_put_sync(&host->mmc->card->dev);
 		return -EINVAL;
 
 	err = crypto_qti_keyslot_evict(host->crypto_vops->priv, slot);
 	if (err)
 		pr_err("%s: failed with error %d\n", __func__, err);
-
-	pm_runtime_put_sync(&host->mmc->card->dev);
 
 	return err;
 }
@@ -179,7 +162,6 @@ int cqhci_host_init_crypto_qti_spec(struct cqhci_host *host,
 	int err = 0;
 	unsigned int crypto_modes_supported[BLK_ENCRYPTION_MODE_MAX];
 	enum blk_crypto_mode_num blk_mode_num;
-	unsigned int num_slots = 0;
 
 	/* Default to disabling crypto */
 	host->caps &= ~CQHCI_CAP_CRYPTO_SUPPORT;
@@ -229,29 +211,11 @@ int cqhci_host_init_crypto_qti_spec(struct cqhci_host *host,
 				host->crypto_cap_array[cap_idx].sdus_mask * 512;
 	}
 
-	num_slots = cqhci_num_keyslots(host);
-
-#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
-	if (num_slots > crypto_qti_ice_get_num_fde_slots()) {
-		//Reduce the total number of slots available to FBE
-		//(by the number reserved for the FDE)
-		//Check at least one slot for backward compatibility,
-		//otherwise return failure
-		if (num_slots - crypto_qti_ice_get_num_fde_slots() < 1) {
-			pr_err("%s: Too much slots allocated to fde\n", __func__);
-			err = -ENOMEM;
-			goto out;
-		} else {
-			num_slots = num_slots - crypto_qti_ice_get_num_fde_slots();
-		}
-	}
-#endif
 	host->mmc->ksm = keyslot_manager_create(host->mmc->parent,
-						num_slots, ksm_ops,
-						BLK_CRYPTO_FEATURE_STANDARD_KEYS |
-						BLK_CRYPTO_FEATURE_WRAPPED_KEYS,
-						crypto_modes_supported,
-						host);
+				       cqhci_num_keyslots(host), ksm_ops,
+				       BLK_CRYPTO_FEATURE_WRAPPED_KEYS,
+				       crypto_modes_supported,
+				       host);
 
 	if (!host->mmc->ksm) {
 		err = -ENOMEM;
@@ -337,65 +301,6 @@ int cqhci_crypto_qti_init_crypto(struct cqhci_host *host,
 	return err;
 }
 
-#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
-int cqhci_crypto_qti_prep_desc(struct cqhci_host *host, struct mmc_request *mrq,
-			       u64 *ice_ctx)
-{
-	struct bio_crypt_ctx *bc;
-	struct mmc_queue_req *mqrq = container_of(mrq, struct mmc_queue_req,
-						  brq.mrq);
-	struct request *req = mmc_queue_req_to_req(mqrq);
-
-	int ret = 0;
-	struct ice_data_setting setting;
-	bool bypass = true;
-	short key_index = 0;
-	if (!ice_ctx)
-		return -EINVAL;
-	*ice_ctx = 0;
-
-	if (!req || !req->bio)
-		return ret;
-
-	if (!bio_crypt_should_process(req)) {
-		ret = crypto_qti_ice_config_start(req, &setting);
-		if (!ret) {
-			key_index = setting.crypto_data.key_index;
-			bypass = (rq_data_dir(req) == WRITE) ?
-				 setting.encr_bypass : setting.decr_bypass;
-			*ice_ctx = DATA_UNIT_NUM(req->__sector) |
-				   CRYPTO_CONFIG_INDEX(key_index) |
-				   CRYPTO_ENABLE(!bypass);
-		} else {
-			pr_err("%s crypto config failed err = %d\n", __func__,
-				ret);
-		}
-		return ret;
-	}
-
-	if (WARN_ON(!cqhci_is_crypto_enabled(host))) {
-		/*
-		 * Upper layer asked us to do inline encryption
-		 * but that isn't enabled, so we fail this request.
-		 */
-		return -EINVAL;
-	}
-
-	bc = req->bio->bi_crypt_context;
-
-	if (!cqhci_keyslot_valid(host, bc->bc_keyslot))
-		return -EINVAL;
-
-	if (ice_ctx) {
-		*ice_ctx = DATA_UNIT_NUM(bc->bc_dun[0]) |
-			   CRYPTO_CONFIG_INDEX(bc->bc_keyslot) |
-			   CRYPTO_ENABLE(true);
-	}
-
-	return 0;
-}
-#endif
-
 int cqhci_crypto_qti_debug(struct cqhci_host *host)
 {
 	return crypto_qti_debug(host->crypto_vops->priv);
@@ -415,13 +320,6 @@ int cqhci_crypto_qti_resume(struct cqhci_host *host)
 int cqhci_crypto_qti_recovery_finish(struct cqhci_host *host)
 {
 	keyslot_manager_reprogram_all_keys(host->mmc->ksm);
-	return 0;
-}
-
-int cqhci_crypto_qti_restore_from_hibernation(struct cqhci_host *host)
-{
-	cqhci_crypto_enable(host);
-	cqhci_crypto_recovery_finish(host);
 	return 0;
 }
 
