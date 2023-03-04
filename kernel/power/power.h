@@ -8,11 +8,11 @@
 struct swsusp_info {
 	struct new_utsname	uts;
 	u32			version_code;
-	unsigned long		num_physpages;
+	u64			num_physpages;
 	int			cpus;
-	unsigned long		image_pages;
-	unsigned long		pages;
-	unsigned long		size;
+	u64			image_pages;
+	u64			pages;
+	u64			size;
 } __aligned(PAGE_SIZE);
 
 #ifdef CONFIG_HIBERNATION
@@ -179,7 +179,7 @@ extern void swsusp_close(fmode_t);
 extern int swsusp_unmark(void);
 #endif
 
-struct timeval;
+struct __kernel_old_timeval;
 /* kernel/power/swsusp.c */
 extern void swsusp_show_speed(ktime_t, ktime_t, unsigned int, char *);
 

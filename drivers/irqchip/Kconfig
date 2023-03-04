@@ -426,6 +426,7 @@ config MESON_IRQ_GPIO
 config GOLDFISH_PIC
        bool "Goldfish programmable interrupt controller"
        depends on MIPS && (GOLDFISH || COMPILE_TEST)
+       select GENERIC_IRQ_CHIP
        select IRQ_DOMAIN
        help
          Say yes here to enable Goldfish interrupt controller driver used
@@ -438,6 +439,16 @@ config QCOM_PDC
 	help
 	  Power Domain Controller driver to manage and configure wakeup
 	  IRQs for Qualcomm Technologies Inc (QTI) mobile chips.
+
+config QTI_PDC_SAVE_RESTORE
+	bool "QTI PDC SAVE RESTORE"
+	depends on QCOM_PDC
+	default y if ARCH_SA6155 || ARCH_SA8155 || ARCH_SA8195 || ARCH_SM6150
+	help
+	Enables the QTI PDC feature to save/restore pin configurations
+	during suspend/resume. Enable this to save the PDC enabled irqs
+	when hibernation is enabled and restore back when hibernation
+	exits.
 
 config CSKY_MPINTC
 	bool "C-SKY Multi Processor Interrupt Controller"

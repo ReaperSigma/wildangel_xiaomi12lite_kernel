@@ -143,6 +143,17 @@ bool mhi_scan_rddm_cookie(struct mhi_controller *mhi_cntrl, u32 cookie)
 {
 	int ret;
 	u32 val;
+	int i;
+	bool result = false;
+	struct {
+		char *name;
+		u32 offset;
+	} error_reg[] = {
+		{ "ERROR_DBG1", BHI_ERRDBG1 },
+		{ "ERROR_DBG2", BHI_ERRDBG2 },
+		{ "ERROR_DBG3", BHI_ERRDBG3 },
+		{ NULL },
+	};
 
 	if (!mhi_cntrl->rddm_supported || !cookie)
 		return false;
@@ -152,15 +163,23 @@ bool mhi_scan_rddm_cookie(struct mhi_controller *mhi_cntrl, u32 cookie)
 	if (!MHI_REG_ACCESS_VALID(mhi_cntrl->pm_state))
 		return false;
 
-	ret = mhi_read_reg(mhi_cntrl, mhi_cntrl->bhi, BHI_ERRDBG2, &val);
-	if (ret)
-		return false;
+	/* look for an RDDM cookie match in any of the error debug registers */
+	for (i = 0; error_reg[i].name; i++) {
+		ret = mhi_read_reg(mhi_cntrl, mhi_cntrl->bhi,
+				   error_reg[i].offset, &val);
+		if (ret)
+			break;
+		MHI_CNTRL_LOG("reg:%s value:0x%x\n", error_reg[i].name, val);
 
-	MHI_CNTRL_LOG("BHI_ERRDBG2 value:0x%x\n", val);
-	if (val == cookie)
-		return true;
+		if (!(val ^ cookie)) {
+			MHI_CNTRL_ERR("RDDM cookie found in %s\n",
+					error_reg[i].name);
+			return true;
+		}
+	}
 
-	return false;
+	MHI_CNTRL_ERR("RDDM cookie not found\n");
+	return result;
 }
 EXPORT_SYMBOL(mhi_scan_rddm_cookie);
 
@@ -678,6 +697,23 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 	if (ret) {
 		MHI_CNTRL_ERR("MHI did not load SBL/EDL image, ret:%d\n", ret);
 		goto fw_load_error_release;
+	}
+
+	if (!ret && mhi_cntrl->dev->of_node) {
+#define QRTR_INSTANCE_MASK	0x0000FFFF
+#define QRTR_INSTANCE_SHIFT	0
+
+		u32 instance;
+
+		ret = of_property_read_u32(mhi_cntrl->dev->of_node,
+					   "qrtr_instance_id", &instance);
+		if (!ret) {
+			MHI_CNTRL_LOG("QRTR instance ID is 0x%x\n", instance);
+			instance &= QRTR_INSTANCE_MASK;
+			mhi_write_reg_field(mhi_cntrl, mhi_cntrl->bhi,
+					    BHI_ERRDBG2, QRTR_INSTANCE_MASK,
+					    QRTR_INSTANCE_SHIFT, instance);
+		}
 	}
 
 	/* we are done with FW load is EE is EDL */

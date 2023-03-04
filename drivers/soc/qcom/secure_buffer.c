@@ -233,19 +233,6 @@ int hyp_assign_table(struct sg_table *table,
 	ret = batched_hyp_assign(table, source_vm_copy, source_vm_copy_size,
 				 dest_vm_copy, dest_vm_copy_size);
 
-	if (!ret) {
-		while (dest_nelems--) {
-			if (dest_vmids[dest_nelems] == VMID_HLOS)
-				break;
-		}
-
-		if (dest_nelems == -1)
-			set_each_page_of_sg(table, SECURE_PAGE_MAGIC);
-		else
-			set_each_page_of_sg(table, 0);
-	}
-
-
 	dma_unmap_single(qcom_secure_buffer_dev, dest_dma_addr,
 			 dest_vm_copy_size, DMA_TO_DEVICE);
 out_free_dest:
@@ -288,6 +275,10 @@ const char *msm_secure_vmid_to_string(int secure_vmid)
 	switch (secure_vmid) {
 	case VMID_HLOS:
 		return "VMID_HLOS";
+	case VMID_SSC_Q6:
+		return "VMID_SSC_Q6";
+	case VMID_ADSP_Q6:
+		return "VMID_ADSP_Q6";
 	case VMID_CP_TOUCH:
 		return "VMID_CP_TOUCH";
 	case VMID_CP_BITSTREAM:

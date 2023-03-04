@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef HABMM_H
 #define HABMM_H
@@ -151,8 +152,10 @@ int32_t habmm_socket_send(int32_t handle, void *src_buff, uint32_t size_bytes,
  * inout dst_buff - buffer pointer to store received data
  * inout size_bytes - size of the dst_buff. returned value shows the actual
  *                    bytes received.
- * in timeout - timeout value specified by the client to avoid forever block
- * in flags - future extension
+ * in timeout - timeout value specified by the client to avoid forever blocking,
+ *              The unit of measurement is ms.
+ *              0 is immediately timeout; -1 is forever blocking.
+ * in flags - details as below.
  *
  *
  * Return:
@@ -161,7 +164,7 @@ int32_t habmm_socket_send(int32_t handle, void *src_buff, uint32_t size_bytes,
  */
 
 /* Non-blocking mode: function will return immediately if there is no data
- * available.  Supported only for kernel clients.
+ * available.
  */
 #define HABMM_SOCKET_RECV_FLAGS_NON_BLOCKING 0x00000001
 
@@ -169,6 +172,14 @@ int32_t habmm_socket_send(int32_t handle, void *src_buff, uint32_t size_bytes,
  * uninterruptbile blocking call.
  */
 #define HABMM_SOCKET_RECV_FLAGS_UNINTERRUPTIBLE 0x00000002
+
+/* Enable timeout function, This flag is used to indicate that the timeout
+ * function takes effect. Note that the timeout parameter is meaningful only if
+ * this flag is added, otherwise the timeout parameter is ignored.
+ * In addition, when the HABMM_SOCKET_RECV_FLAGS_NON_BLOCKING flag is set,
+ * the current flag is ignored.
+ */
+#define HABMM_SOCKET_RECV_FLAGS_TIMEOUT 0x00000004
 
 int32_t habmm_socket_recv(int32_t handle, void *dst_buff, uint32_t *size_bytes,
 		uint32_t timeout, uint32_t flags);
@@ -297,7 +308,8 @@ int32_t habmm_unexport(int32_t handle, uint32_t export_id, uint32_t flags);
  *                 original exported buffer size
  * in export_id - received when exporter sent its exporting ID through
  *                habmm_socket_send() previously
- * in flags - future extension
+ * in flags - HABMM_EXPIMP_FLAGS_DMABUF, the output buff_shared is a dma_buf.
+ *            dma_buf is the only supported format in khab
  *
  * Return:
  * status (success/failure)
@@ -323,7 +335,8 @@ int32_t habmm_import(int32_t handle, void **buff_shared, uint32_t size_bytes,
  * in export_id - received when exporter sent its exporting ID through
  *                habmm_socket_send() previously
  * in buff_shared - received from habmm_import() together with export_id
- * in flags - future extension
+ * in flags - HABMM_EXPIMP_FLAGS_DMABUF, the buff_shared is a dma_buf.
+ *            dma_buf is the only supported format in khab
  *
  * Return:
  * status (success/failure)

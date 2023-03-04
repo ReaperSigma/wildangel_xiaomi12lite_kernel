@@ -1916,7 +1916,9 @@ long qcedev_ioctl(struct file *file,
 				goto exit_free_qcedev_areq;
 			}
 
-			if (map_buf.num_fds > QCEDEV_MAX_BUFFERS) {
+			if (map_buf.num_fds > ARRAY_SIZE(map_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+							__func__, map_buf.num_fds);
 				err = -EINVAL;
 				goto exit_free_qcedev_areq;
 			}
@@ -1954,6 +1956,12 @@ long qcedev_ioctl(struct file *file,
 			if (copy_from_user(&unmap_buf,
 				(void __user *)arg, sizeof(unmap_buf))) {
 				err = -EFAULT;
+				goto exit_free_qcedev_areq;
+			}
+			if (unmap_buf.num_fds > ARRAY_SIZE(unmap_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+							__func__, unmap_buf.num_fds);
+				err = -EINVAL;
 				goto exit_free_qcedev_areq;
 			}
 
@@ -2191,6 +2199,11 @@ static int qcedev_suspend(struct platform_device *pdev, pm_message_t state)
 
 suspend_exit:
 	mutex_unlock(&qcedev_sent_bw_req);
+	if (qce_pm_table.suspend) {
+		qcedev_ce_high_bw_req(podev, true);
+		qce_pm_table.suspend(podev->qce);
+		qcedev_ce_high_bw_req(podev, false);
+	}
 	return 0;
 }
 
@@ -2203,6 +2216,12 @@ static int qcedev_resume(struct platform_device *pdev)
 
 	if (!podev)
 		return 0;
+
+	if (qce_pm_table.resume) {
+		qcedev_ce_high_bw_req(podev, true);
+		qce_pm_table.resume(podev->qce);
+		qcedev_ce_high_bw_req(podev, false);
+	}
 
 	mutex_lock(&qcedev_sent_bw_req);
 	if (podev->high_bw_req_count) {

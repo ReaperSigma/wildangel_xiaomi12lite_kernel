@@ -116,6 +116,23 @@ static void dwmac4_dma_init_channel(void __iomem *ioaddr,
 	       ioaddr + DMA_CHAN_INTR_ENA(chan));
 }
 
+static void dwmac410_dma_init_channel(void __iomem *ioaddr,
+				      struct stmmac_dma_cfg *dma_cfg, u32 chan)
+{
+	u32 value;
+
+	/* common channel control register config */
+	value = readl(ioaddr + DMA_CHAN_CONTROL(chan));
+	if (dma_cfg->pblx8)
+		value = value | DMA_BUS_MODE_PBL;
+
+	writel(value, ioaddr + DMA_CHAN_CONTROL(chan));
+
+	/* Mask interrupts by writing to CSR7 */
+	writel(DMA_CHAN_INTR_DEFAULT_MASK_4_10,
+	       ioaddr + DMA_CHAN_INTR_ENA(chan));
+}
+
 static void dwmac4_dma_init(void __iomem *ioaddr,
 			    struct stmmac_dma_cfg *dma_cfg, int atds)
 {
@@ -194,7 +211,7 @@ static void dwmac4_dma_rx_chan_op_mode(void __iomem *ioaddr, int mode,
 				       u32 channel, int fifosz, u8 qmode)
 {
 	unsigned int rqs = fifosz / 256 - 1;
-	u32 mtl_rx_op, mtl_rx_int;
+	u32 mtl_rx_op;
 
 	mtl_rx_op = readl(ioaddr + MTL_CHAN_RX_OP_MODE(channel));
 
@@ -265,11 +282,6 @@ static void dwmac4_dma_rx_chan_op_mode(void __iomem *ioaddr, int mode,
 	}
 
 	writel(mtl_rx_op, ioaddr + MTL_CHAN_RX_OP_MODE(channel));
-
-	/* Enable MTL RX overflow */
-	mtl_rx_int = readl(ioaddr + MTL_CHAN_INT_CTRL(channel));
-	writel(mtl_rx_int | MTL_RX_OVERFLOW_INT_EN,
-	       ioaddr + MTL_CHAN_INT_CTRL(channel));
 }
 
 static void dwmac4_dma_tx_chan_op_mode(void __iomem *ioaddr, int mode,
@@ -324,8 +336,8 @@ static void dwmac4_dma_tx_chan_op_mode(void __iomem *ioaddr, int mode,
 	writel(mtl_tx_op, ioaddr +  MTL_CHAN_TX_OP_MODE(channel));
 }
 
-static void dwmac4_get_hw_feature(void __iomem *ioaddr,
-				  struct dma_features *dma_cap)
+static int dwmac4_get_hw_feature(void __iomem *ioaddr,
+				 struct dma_features *dma_cap)
 {
 	u32 hw_cap = readl(ioaddr + GMAC_HW_FEATURE0);
 
@@ -388,6 +400,8 @@ static void dwmac4_get_hw_feature(void __iomem *ioaddr,
 	dma_cap->frpbs = (hw_cap & GMAC_HW_FEAT_FRPBS) >> 11;
 	dma_cap->frpsel = (hw_cap & GMAC_HW_FEAT_FRPSEL) >> 10;
 	dma_cap->dvlan = (hw_cap & GMAC_HW_FEAT_DVLAN) >> 5;
+
+	return 0;
 }
 
 /* Enable/disable TSO feature and set MSS */
@@ -431,6 +445,23 @@ static void dwmac4_set_bfsize(void __iomem *ioaddr, int bfsize, u32 chan)
 	writel(value, ioaddr + DMA_CHAN_RX_CONTROL(chan));
 }
 
+static void dwmac4_dma_rx_chan_fep(void __iomem *ioaddr, bool en, u32 chan)
+{
+	u32 value;
+
+	if (en) {
+		/* enable FEP */
+		value = readl_relaxed(ioaddr + MTL_CHAN_RX_OP_MODE(chan));
+		writel_relaxed(value | MTL_OP_MODE_FEP,
+			       ioaddr + MTL_CHAN_RX_OP_MODE(chan));
+	} else {
+		/* disable FEP */
+		value = readl_relaxed(ioaddr + MTL_CHAN_RX_OP_MODE(chan));
+		writel_relaxed(value & ~MTL_OP_MODE_FEP,
+			       ioaddr + MTL_CHAN_RX_OP_MODE(chan));
+	}
+}
+
 const struct stmmac_dma_ops dwmac4_dma_ops = {
 	.reset = dwmac4_dma_reset,
 	.init = dwmac4_dma_init,
@@ -457,12 +488,13 @@ const struct stmmac_dma_ops dwmac4_dma_ops = {
 	.enable_tso = dwmac4_enable_tso,
 	.qmode = dwmac4_qmode,
 	.set_bfsize = dwmac4_set_bfsize,
+	.enable_rx_fep = dwmac4_dma_rx_chan_fep,
 };
 
 const struct stmmac_dma_ops dwmac410_dma_ops = {
 	.reset = dwmac4_dma_reset,
 	.init = dwmac4_dma_init,
-	.init_chan = dwmac4_dma_init_channel,
+	.init_chan = dwmac410_dma_init_channel,
 	.init_rx_chan = dwmac4_dma_init_rx_chan,
 	.init_tx_chan = dwmac4_dma_init_tx_chan,
 	.axi = dwmac4_dma_axi,
@@ -485,4 +517,5 @@ const struct stmmac_dma_ops dwmac410_dma_ops = {
 	.enable_tso = dwmac4_enable_tso,
 	.qmode = dwmac4_qmode,
 	.set_bfsize = dwmac4_set_bfsize,
+	.enable_rx_fep = dwmac4_dma_rx_chan_fep,
 };

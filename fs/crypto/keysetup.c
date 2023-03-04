@@ -47,6 +47,13 @@ struct fscrypt_mode fscrypt_modes[] = {
 		.ivsize = 32,
 		.blk_crypto_mode = BLK_ENCRYPTION_MODE_ADIANTUM,
 	},
+	[FSCRYPT_MODE_PRIVATE] = {
+		.friendly_name = "ice",
+		.cipher_str = "xts(aes)",
+		.keysize = 64,
+		.ivsize = 16,
+		.blk_crypto_mode = BLK_ENCRYPTION_MODE_AES_256_XTS,
+	},
 };
 
 static DEFINE_MUTEX(fscrypt_mode_key_setup_mutex);
@@ -55,6 +62,8 @@ static struct fscrypt_mode *
 select_encryption_mode(const union fscrypt_policy *policy,
 		       const struct inode *inode)
 {
+	BUILD_BUG_ON(ARRAY_SIZE(fscrypt_modes) != FSCRYPT_MODE_MAX + 1);
+
 	if (S_ISREG(inode->i_mode))
 		return &fscrypt_modes[fscrypt_policy_contents_mode(policy)];
 
@@ -173,7 +182,7 @@ static int setup_per_mode_enc_key(struct fscrypt_info *ci,
 	unsigned int hkdf_infolen = 0;
 	int err;
 
-	if (WARN_ON(mode_num > __FSCRYPT_MODE_MAX))
+	if (WARN_ON(mode_num > FSCRYPT_MODE_MAX))
 		return -EINVAL;
 
 	prep_key = &keys[mode_num];
@@ -196,7 +205,7 @@ static int setup_per_mode_enc_key(struct fscrypt_info *ci,
 			err = -EINVAL;
 			goto out_unlock;
 		}
-		for (i = 0; i <= __FSCRYPT_MODE_MAX; i++) {
+		for (i = 0; i <= FSCRYPT_MODE_MAX; i++) {
 			if (fscrypt_is_key_prepared(&keys[i], ci)) {
 				fscrypt_warn(ci->ci_inode,
 					     "Each hardware-wrapped key can only be used with one encryption mode");

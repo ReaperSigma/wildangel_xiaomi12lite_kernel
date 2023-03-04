@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -1594,6 +1595,10 @@ static struct pinctrl_qup monaco_qup_regs[] = {
 	QUP_I3C(6, QUP_I3C_6_MODE_OFFSET),
 };
 
+static const int monaco_reserved_gpios[] = {
+	0, 1, 2, 3, 9, 111, -1
+};
+
 static const struct msm_gpio_wakeirq_map monaco_mpm_map[] = {
 	{0, 84},
 	{3, 13},
@@ -1647,6 +1652,19 @@ static const struct msm_gpio_wakeirq_map monaco_mpm_map[] = {
 	{82, 63},
 	{83, 64},
 	{84, 65},
+	{86, 66},
+	{87, 67},
+	{90, 69},
+	{95, 70},
+	{96, 71},
+	{97, 73},
+	{98, 74},
+	{101, 75},
+	{102, 76},
+	{104, 77},
+	{105, 78},
+	{109, 79},
+	{111, 80},
 };
 
 static const struct msm_pinctrl_soc_data monaco_pinctrl = {
@@ -1656,6 +1674,7 @@ static const struct msm_pinctrl_soc_data monaco_pinctrl = {
 	.nfunctions = ARRAY_SIZE(monaco_functions),
 	.groups = monaco_groups,
 	.ngroups = ARRAY_SIZE(monaco_groups),
+	.reserved_gpios = monaco_reserved_gpios,
 	.ngpios = 112,
 	.qup_regs = monaco_qup_regs,
 	.nqup_regs = ARRAY_SIZE(monaco_qup_regs),

@@ -359,6 +359,7 @@ struct ep_pcie_dev_t {
 	bool			     m2_autonomous;
 	bool			     mhi_soc_reset_en;
 	bool			     aoss_rst_clear;
+	bool			     avoid_reboot_in_d3hot;
 	u32                          dbi_base_reg;
 	u32                          slv_space_reg;
 	u32                          phy_status_reg;
@@ -392,6 +393,7 @@ struct ep_pcie_dev_t {
 	ulong                        wake_counter;
 	ulong                        msi_counter;
 	ulong                        global_irq_counter;
+	ulong                        perst_ast_in_enum_counter;
 
 	bool                         dump_conf;
 	bool                         config_mmio_init;
@@ -411,7 +413,6 @@ struct ep_pcie_dev_t {
 	bool			     conf_ipa_msi_iatu;
 
 	struct ep_pcie_register_event *event_reg;
-	struct work_struct	     handle_perst_work;
 	struct work_struct           handle_bme_work;
 	struct work_struct           handle_d3cold_work;
 

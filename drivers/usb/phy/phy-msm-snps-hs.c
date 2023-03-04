@@ -66,6 +66,9 @@
 #define REFCLK_SEL_MASK				(0x3 << 0)
 #define REFCLK_SEL_DEFAULT			(0x2 << 0)
 
+#define USB2_PHY_USB_PHY_PWRDOWN_CTRL		(0xa4)
+#define PWRDOWN_B				BIT(0)
+
 #define USB2PHY_USB_PHY_RTUNE_SEL		(0xb4)
 #define RTUNE_SEL				BIT(0)
 
@@ -102,6 +105,7 @@ struct msm_hsphy {
 	bool			re_enable_eud;
 
 	struct clk		*ref_clk_src;
+	struct clk		*ref_clk;
 	struct clk		*cfg_ahb_clk;
 	struct reset_control	*phy_reset;
 
@@ -155,12 +159,18 @@ static void msm_hsphy_enable_clocks(struct msm_hsphy *phy, bool on)
 		if (phy->cfg_ahb_clk)
 			clk_prepare_enable(phy->cfg_ahb_clk);
 
+		if (phy->ref_clk)
+			clk_prepare_enable(phy->ref_clk);
+
 		phy->clocks_enabled = true;
 	}
 
 	if (phy->clocks_enabled && !on) {
 		if (phy->cfg_ahb_clk)
 			clk_disable_unprepare(phy->cfg_ahb_clk);
+
+		if (phy->ref_clk)
+			clk_disable_unprepare(phy->ref_clk);
 
 		clk_disable_unprepare(phy->ref_clk_src);
 		phy->clocks_enabled = false;
@@ -357,26 +367,46 @@ static void hsusb_phy_write_seq(void __iomem *base, u32 *seq, int cnt,
 }
 
 #define EUD_EN2 BIT(0)
+static inline bool is_msm_hsphy_eud_enabled(struct msm_hsphy *phy)
+{
+	u32 val = 0;
+
+	if (phy->eud_enable_reg)
+		val = readl_relaxed(phy->eud_enable_reg);
+
+	return (val & EUD_EN2);
+}
+
 static int msm_hsphy_init(struct usb_phy *uphy)
 {
 	struct msm_hsphy *phy = container_of(uphy, struct msm_hsphy, phy);
 	int ret;
-	u32 rcal_code = 0, eud_csr_reg = 0;
+	u32 rcal_code = 0;
 
 	dev_dbg(uphy->dev, "%s phy_flags:0x%x\n", __func__, phy->phy.flags);
-	if (phy->eud_enable_reg) {
-		eud_csr_reg = readl_relaxed(phy->eud_enable_reg);
-		if (eud_csr_reg & EUD_EN2) {
-			dev_dbg(phy->phy.dev, "csr:0x%x eud is enabled\n",
-							eud_csr_reg);
-			/* if in host mode, disable EUD */
-			if (phy->phy.flags & PHY_HOST_MODE) {
-				qcom_scm_io_writel(phy->eud_reg, 0x0);
-				phy->re_enable_eud = true;
-			} else {
-				ret = msm_hsphy_enable_power(phy, true);
-				return ret;
-			}
+	if (is_msm_hsphy_eud_enabled(phy)) {
+		dev_dbg(phy->phy.dev, "eud is enabled\n");
+		/* if in host mode, disable EUD */
+		if (phy->phy.flags & PHY_HOST_MODE) {
+			qcom_scm_io_writel(phy->eud_reg, 0x0);
+			phy->re_enable_eud = true;
+		} else {
+			ret = msm_hsphy_enable_power(phy, true);
+			/* On some targets 3.3V LDO which acts as EUD power
+			 * up (which in turn reset the USB PHY) is shared
+			 * with EMMC so that it won't be turned off even
+			 * though we remove our vote as part of disconnect
+			 * so power up this regulator is actually not
+			 * resetting the PHY next time when cable is
+			 * connected. So we explicitly bring
+			 * it out of power down state by writing
+			 * to POWER DOWN register,powering on the EUD
+			 * will bring EUD as well as phy out of reset state.
+			 */
+			msm_usb_write_readback(phy->base,
+				USB2_PHY_USB_PHY_PWRDOWN_CTRL,
+				PWRDOWN_B, 1);
+			return ret;
 		}
 	}
 
@@ -572,6 +602,9 @@ suspend:
 			if (!phy->dpdm_enable) {
 				if (!(phy->phy.flags & EUD_SPOOF_DISCONNECT)) {
 					dev_dbg(uphy->dev, "turning off clocks/ldo\n");
+					msm_usb_write_readback(phy->base,
+						USB2_PHY_USB_PHY_PWRDOWN_CTRL,
+						PWRDOWN_B, 0);
 					msm_hsphy_enable_clocks(phy, false);
 					msm_hsphy_enable_power(phy, false);
 				}
@@ -674,8 +707,9 @@ static int msm_hsphy_dpdm_regulator_enable(struct regulator_dev *rdev)
 	dev_dbg(phy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, phy->dpdm_enable);
 
-	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg)) {
+	if (is_msm_hsphy_eud_enabled(phy)) {
 		dev_err(phy->phy.dev, "eud is enabled\n");
+		phy->dpdm_enable = true;
 		return 0;
 	}
 
@@ -719,9 +753,23 @@ static int msm_hsphy_dpdm_regulator_disable(struct regulator_dev *rdev)
 	dev_dbg(phy->phy.dev, "%s dpdm_enable:%d\n",
 				__func__, phy->dpdm_enable);
 
+	if (is_msm_hsphy_eud_enabled(phy)) {
+		dev_err(phy->phy.dev, "eud is enabled\n");
+		phy->dpdm_enable = false;
+		return 0;
+	}
+
 	mutex_lock(&phy->phy_lock);
 	if (phy->dpdm_enable) {
 		if (!phy->cable_connected) {
+			/*
+			 * Phy reset is needed in case multiple instances
+			 * of HSPHY exists with shared power supplies. This
+			 * reset is to bring out the PHY from high-Z state
+			 * and avoid extra current consumption.
+			 *
+			 */
+			msm_hsphy_reset(phy);
 			msm_hsphy_enable_clocks(phy, false);
 			ret = msm_hsphy_enable_power(phy, false);
 			if (ret < 0) {
@@ -857,6 +905,13 @@ static int msm_hsphy_probe(struct platform_device *pdev)
 	if (IS_ERR(phy->ref_clk_src)) {
 		dev_dbg(dev, "clk get failed for ref_clk_src\n");
 		ret = PTR_ERR(phy->ref_clk_src);
+		return ret;
+	}
+
+	phy->ref_clk = devm_clk_get_optional(dev, "ref_clk");
+	if (IS_ERR(phy->ref_clk)) {
+		dev_dbg(dev, "clk get failed for ref_clk\n");
+		ret = PTR_ERR(phy->ref_clk);
 		return ret;
 	}
 
@@ -1052,7 +1107,7 @@ static int msm_hsphy_probe(struct platform_device *pdev)
 	 * kernel boot till USB phy driver is initialized based on cable status,
 	 * keep LDOs on here.
 	 */
-	if (phy->eud_enable_reg && readl_relaxed(phy->eud_enable_reg))
+	if (is_msm_hsphy_eud_enabled(phy))
 		msm_hsphy_enable_power(phy, true);
 	return 0;
 

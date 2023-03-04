@@ -55,8 +55,11 @@ enum {
 	HW_PLATFORM_SBC = 24,
 	HW_PLATFORM_ADP = 25,
 	HW_PLATFORM_HDK = 31,
+	HW_PLATFORM_IOT = 32,
 	HW_PLATFORM_ATP = 33,
 	HW_PLATFORM_IDP = 34,
+	HW_PLATFORM_WDP = 36,
+	HW_PLATFORM_QAM = 37,
 	HW_PLATFORM_INVALID
 };
 
@@ -78,9 +81,12 @@ static const char * const hw_platform[] = {
 	[HW_PLATFORM_STP] = "STP",
 	[HW_PLATFORM_SBC] = "SBC",
 	[HW_PLATFORM_ADP] = "ADP",
+	[HW_PLATFORM_QAM] = "QAM",
 	[HW_PLATFORM_HDK] = "HDK",
+	[HW_PLATFORM_IOT] = "IOT",
 	[HW_PLATFORM_ATP] = "ATP",
 	[HW_PLATFORM_IDP] = "IDP",
+	[HW_PLATFORM_WDP] = "WDP",
 };
 
 enum {
@@ -186,6 +192,9 @@ static struct socinfo {
 #define SMEM_IMAGE_VERSION_OEM_SIZE 33
 #define SMEM_IMAGE_VERSION_OEM_OFFSET 95
 #define SMEM_IMAGE_VERSION_PARTITION_APPS 10
+
+int softsku_idx;
+module_param_named(softsku_idx, softsku_idx, int, 0644);
 
 /* Version 2 */
 static uint32_t socinfo_get_raw_id(void)
@@ -609,6 +618,14 @@ msm_get_nmodem_supported(struct device *dev,
 }
 ATTR_DEFINE(nmodem_supported);
 
+static ssize_t
+msm_get_vendor(struct device *dev,
+			struct device_attribute *attr,
+			char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "Qualcomm\n");
+}
+
 struct qcom_socinfo {
 	struct soc_device *soc_dev;
 	struct soc_device_attribute attr;
@@ -660,15 +677,22 @@ static const struct soc_id soc_id[] = {
 	{ 310, "MSM8996AU" },
 	{ 311, "APQ8096AU" },
 	{ 312, "APQ8096SG" },
+	{ 352, "QCS405" },
 	{ 356, "KONA" },
+	{ 455, "KONA" },
 	{ 362, "SA8155" },
 	{ 367, "SA8155P" },
+	{ 522, "SA8155P-IOT" },
 	{ 377, "SA6155P" },
 	{ 384, "SA6155"},
+	{ 401, "QCS610"},
 	{ 405, "SA8195P" },
+	{ 406, "QCS410"},
 	{ 415, "LAHAINA" },
 	{ 439, "LAHAINAP" },
 	{ 449, "SC_DIREWOLF"},
+	{ 451, "SA2145P"},
+	{ 452, "SA2150P"},
 	{ 456, "LAHAINA-ATP" },
 	{ 460, "SA_DIREWOLF_IVI"},
 	{ 461, "SA_DIREWOLF_ADAS"},
@@ -677,7 +701,9 @@ static const struct soc_id soc_id[] = {
 	{ 450, "SHIMA" },
 	{ 454, "HOLI" },
 	{ 507, "BLAIR" },
+	{ 578, "BLAIR-LITE" },
 	{ 486, "MONACO" },
+	{ 517, "MONACOP" },
 	{ 458, "SDXLEMUR" },
 	{ 483, "SDXLEMUR-SD"},
 	{ 509, "SDXLEMUR-LITE"},
@@ -688,6 +714,18 @@ static const struct soc_id soc_id[] = {
 	{ 498, "YUPIKP-IOT" },
 	{ 499, "YUPIKP" },
 	{ 515, "YUPIK-LTE" },
+	{ 523, "BENGAL" },
+	{ 524, "SCUBA" },
+	{ 417, "BENGAL" },
+	{ 444, "BENGAL" },
+	{ 532, "LEMANSAU_IVI" },
+	{ 533, "LEMANSAU_ADAS_H" },
+	{ 534, "LEMANSAU_IVI_ADAS" },
+	{ 535, "LEMANSAU_ADAS" },
+	{ 418, "SA515M" },
+	{ 334, "SDX24" },
+	{ 335, "SDX24M" },
+	{ 408, "SA415M" },
 };
 
 static struct qcom_socinfo *qsocinfo;
@@ -934,6 +972,8 @@ static struct device_attribute select_image =
 static struct device_attribute images =
 	__ATTR(images, 0444, msm_get_images, NULL);
 
+static struct device_attribute vendor =
+	__ATTR(vendor, 0444, msm_get_vendor, NULL);
 
 static umode_t soc_info_attribute(struct kobject *kobj,
 						   struct attribute *attr,
@@ -1008,6 +1048,7 @@ static void socinfo_populate_sysfs(struct qcom_socinfo *qcom_socinfo)
 	msm_custom_socinfo_attrs[i++] = &image_crm_version.attr;
 	msm_custom_socinfo_attrs[i++] = &select_image.attr;
 	msm_custom_socinfo_attrs[i++] = &images.attr;
+	msm_custom_socinfo_attrs[i++] = &vendor.attr;
 	msm_custom_socinfo_attrs[i++] = NULL;
 	qcom_socinfo->attr.custom_attr_group = &custom_soc_attr_group;
 }

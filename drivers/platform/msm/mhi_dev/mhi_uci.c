@@ -651,7 +651,7 @@ static int mhi_uci_send_async(struct uci_client *uci_handle,
 	int bytes_to_write;
 	struct mhi_req *ureq;
 
-	uci_log(UCI_DBG_VERBOSE,
+	uci_log(UCI_DBG_DBG,
 		"Async write for ch %d size %d\n",
 		uci_handle->out_chan, size);
 
@@ -865,7 +865,7 @@ static int mhi_uci_read_async(struct uci_client *uci_handle, int *bytes_avail)
 	struct mhi_req *ureq;
 	struct mhi_dev_client *client_handle;
 
-	uci_log(UCI_DBG_ERROR,
+	uci_log(UCI_DBG_DBG,
 		"Async read for ch %d\n", uci_handle->in_chan);
 
 	ureq = mhi_uci_get_req(uci_handle);
@@ -1031,7 +1031,7 @@ static int open_client_mhi_channels(struct uci_client *uci_client)
 			uci_ctxt.event_notifier);
 	if (rc < 0) {
 		uci_log(UCI_DBG_ERROR,
-			"Failed to open chan %d, ret 0x%x\n",
+			"Failed to open chan %d, ret %d\n",
 			uci_client->out_chan, rc);
 		goto handle_in_err;
 	}
@@ -1081,17 +1081,16 @@ static int mhi_uci_client_open(struct inode *mhi_inode,
 		return -EINVAL;
 	}
 
+	if (!uci_handle) {
+		uci_log(UCI_DBG_DBG, "No memory, returning failure\n");
+		return -ENOMEM;
+	}
+
 	mutex_lock(&uci_handle->client_lock);
 	uci_log(UCI_DBG_DBG,
 		"Client opened struct device node 0x%x, ref count 0x%x\n",
 		iminor(mhi_inode), atomic_read(&uci_handle->ref_count));
 	if (atomic_add_return(1, &uci_handle->ref_count) == 1) {
-		if (!uci_handle) {
-			atomic_dec(&uci_handle->ref_count);
-			uci_log(UCI_DBG_DBG, "No memory, returning failure\n");
-			mutex_unlock(&uci_handle->client_lock);
-			return -ENOMEM;
-		}
 		uci_handle->uci_ctxt = &uci_ctxt;
 		uci_handle->f_flags = file_handle->f_flags;
 		if (!atomic_read(&uci_handle->mhi_chans_open)) {
@@ -1192,9 +1191,10 @@ static int mhi_uci_client_release(struct inode *mhi_inode,
 				list_del_init(&ureq->list);
 				ureq->is_stale = true;
 				uci_log(UCI_DBG_VERBOSE,
-					"Adding back req for chan %d to free list\n",
+					"Add back req for chan %d to list\n",
 					ureq->chan);
-				list_add_tail(&ureq->list, &uci_handle->req_list);
+				list_add_tail(&ureq->list,
+					&uci_handle->req_list);
 				count++;
 			}
 		}
@@ -1327,7 +1327,7 @@ static int __mhi_uci_client_read(struct uci_client *uci_handle,
 {
 	int ret_val = 0;
 
-	do {
+	while (!uci_handle->pkt_loc) {
 		if (!mhi_uci_are_channels_connected(uci_handle)) {
 			uci_log(UCI_DBG_ERROR,
 				"%s:Channels are not connected\n", __func__);
@@ -1372,7 +1372,7 @@ static int __mhi_uci_client_read(struct uci_client *uci_handle,
 				uci_handle->in_chan);
 			break;
 		}
-	} while (!uci_handle->pkt_loc);
+	}
 
 	return ret_val;
 }
@@ -2097,7 +2097,7 @@ static void mhi_uci_at_ctrl_client_cb(struct mhi_dev_client_cb_data *cb_data)
 		mhi_dev_close_channel(client->out_handle);
 		mhi_dev_close_channel(client->in_handle);
 
-		/* Add back reqs from in-use list, if any, to free list */
+		/* Add back reqs in-use list, if any, to free list */
 		if (!(client->f_flags & O_SYNC)) {
 			while (!(list_empty(&client->in_use_list))) {
 				ureq = container_of(client->in_use_list.next,

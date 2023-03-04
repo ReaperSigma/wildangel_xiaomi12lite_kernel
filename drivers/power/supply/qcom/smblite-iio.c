@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/delay.h>
@@ -108,9 +109,8 @@ int smblite_iio_get_prop(struct smb_charger *chg, int channel, int *val)
 		rc = smblite_lib_get_die_health(chg, val);
 		break;
 	default:
-		pr_err("get prop %x is not supported\n", channel);
-		rc = -EINVAL;
-		break;
+		pr_debug("get prop %x is not supported\n", channel);
+		return -EINVAL;
 	}
 
 	if (rc < 0) {
@@ -207,8 +207,11 @@ int smblite_iio_set_prop(struct smb_charger *chg, int channel, int val)
 	case PSY_IIO_DIE_HEALTH:
 		power_supply_changed(chg->batt_psy);
 		break;
+	case PSY_IIO_SYS_SOC:
+		rc = smblite_lib_set_prop_batt_sys_soc(chg, val);
+		break;
 	default:
-		pr_err("get prop %d is not supported\n", channel);
+		pr_debug("get prop %d is not supported\n", channel);
 		rc = -EINVAL;
 		break;
 	}
@@ -221,6 +224,7 @@ int smblite_iio_set_prop(struct smb_charger *chg, int channel, int val)
 	return 0;
 }
 
+#ifndef CONFIG_QPNP_SMB5
 struct iio_channel **get_ext_channels(struct device *dev,
 		 const char *const *channel_map, int size)
 {
@@ -245,3 +249,4 @@ struct iio_channel **get_ext_channels(struct device *dev,
 
 	return iio_ch_ext;
 }
+#endif

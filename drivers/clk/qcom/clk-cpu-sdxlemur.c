@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/cpu.h>
@@ -22,7 +23,7 @@
 #include "clk-regmap-mux.h"
 #include "clk-regmap-mux-div.h"
 #include "common.h"
-#include "vdd-level.h"
+#include "vdd-level-cpu.h"
 
 #include "clk-pll.h"
 #include "clk-regmap.h"
@@ -32,6 +33,7 @@
 	container_of(to_clk_regmap(_hw), struct clk_regmap_mux_div, clkr)
 
 static DEFINE_VDD_REGULATORS(vdd_pll, VDD_NUM, 1, vdd_corner);
+static DEFINE_VDD_REGULATORS(vdd_hf_pll, VDD_HF_PLL_NUM, 2, vdd_hf_levels);
 static DEFINE_VDD_REGS_INIT(vdd_cpu, 1);
 
 enum apcs_mux_clk_parent {
@@ -299,6 +301,7 @@ static struct clk_alpha_pll apcs_cpu_pll = {
 	.vco_table = lucid_5lpe_vco,
 	.num_vco = ARRAY_SIZE(lucid_5lpe_vco),
 	.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_LUCID_5LPE],
+	.flags = BYPASS_LATCH,
 	.clkr = {
 		.hw.init = &(struct clk_init_data){
 			.name = "apcs_cpu_pll",
@@ -315,9 +318,93 @@ static struct clk_alpha_pll apcs_cpu_pll = {
 				[VDD_MIN] = 615000000,
 				[VDD_LOW] = 1066000000,
 				[VDD_LOW_L1] = 1500000000,
-				[VDD_NOMINAL] = 1750000000},
+				[VDD_NOMINAL] = 1750000000,
+				[VDD_HIGH] = 1804800000},
+
 		},
 	},
+};
+
+/* Initial configuration for 960MHz */
+static const struct pll_config apcs_cpu_pll_config_qcs404 = {
+	.l = 0x32,
+	.m = 0,
+	.n = 1,
+	.vco_val = 0x0,
+	.vco_mask = 0x3 << 20,
+	.pre_div_val = 0x0,
+	.pre_div_mask = 0x7 << 12,
+	.post_div_val = 0x0,
+	.post_div_mask = 0x3 << 8,
+	.main_output_mask = BIT(3),
+	.aux_output_mask = BIT(0),
+};
+
+static struct clk_pll apcs_cpu_pll_qcs404 = {
+	.mode_reg = 0x0,
+	.l_reg = 0x4,
+	.m_reg = 0x8,
+	.n_reg = 0xc,
+	.config_reg = 0x10,
+	.status_reg = 0x1c,
+	.status_bit = 16,
+	.clkr = {
+		.hw.init = &(struct clk_init_data){
+			.name = "apcs_cpu_pll",
+			.parent_data = &(const struct clk_parent_data){
+				.fw_name = "bi_tcxo_ao",
+			},
+			.num_parents = 1,
+			.ops = &clk_pll_hf_ops,
+		},
+		.vdd_data = {
+			.vdd_class = &vdd_hf_pll,
+			.num_rate_max = VDD_HF_PLL_NUM,
+			.rate_max = (unsigned long[VDD_HF_PLL_NUM]) {
+				[VDD_HF_PLL_SVS] = 2000000000,
+			},
+		},
+	},
+};
+
+/* Initial configuration for 1094.4MHz */
+static const struct alpha_pll_config apcs_cpu_alpha_pll_config_sdx55 = {
+	.l = 0x39,
+	.vco_val = 0x0,
+	.vco_mask = 0x3 << 20,
+	.pre_div_val = 0x0,
+	.pre_div_mask = 0x7 << 12,
+	.post_div_val = 0x0,
+	.post_div_mask = 0x3 << 8,
+	.main_output_mask = BIT(3),
+	.config_ctl_val = 0x20485699,
+	.config_ctl_hi_val = 0x2261,
+	.config_ctl_hi1_val = 0x329A699C,
+	.user_ctl_val = 0x1,
+	.user_ctl_hi_val = 0x805,
+};
+
+static struct clk_init_data apcs_cpu_pll_sdx55 = {
+	.name = "apcs_cpu_pll",
+	.parent_data = &(const struct clk_parent_data){
+		.fw_name = "bi_tcxo_ao",
+	},
+	.num_parents = 1,
+	.ops = &clk_alpha_pll_lucid_ops,
+};
+
+/* Initial configuration for 345.6MHz */
+static const struct alpha_pll_config apcs_cpu_alpha_pll_config_sdxpoorwills = {
+	.l = 0x12,
+};
+
+static struct clk_init_data apcs_cpu_pll_sdxpoorwills = {
+	.name = "apcs_cpu_pll",
+	.parent_data = &(const struct clk_parent_data){
+		.fw_name = "bi_tcxo_ao",
+	},
+	.num_parents = 1,
+	.ops = &clk_trion_pll_ops,
 };
 
 static const struct parent_map apcs_mux_clk_parent_map[] = {
@@ -330,6 +417,26 @@ static const struct clk_parent_data apss_cc_parent_data[] = {
 	{ .fw_name = "bi_tcxo_ao" },
 	{ .fw_name = "gpll0_out_even" },
 	{ .hw = &apcs_cpu_pll.clkr.hw },
+};
+
+static const struct parent_map apcs_mux_clk_parent_map_qcs404[] = {
+	{ P_BI_TCXO, 0 },
+	{ P_GPLL0, 4 },
+	{ P_APCS_CPU_PLL, 5 },
+};
+
+static const struct clk_parent_data apss_cc_parent_data_qcs404[] = {
+	{ .fw_name = "bi_tcxo_ao" },
+	{ .fw_name = "gpll0_out_even" },
+	{ .hw = &apcs_cpu_pll_qcs404.clkr.hw },
+};
+
+static struct clk_init_data apcs_mux_clk_qcs404 = {
+	.name = "apcs_mux_clk",
+	.parent_data = apss_cc_parent_data_qcs404,
+	.num_parents = 3,
+	.flags = CLK_SET_RATE_PARENT,
+	.ops = &cpucc_clk_ops,
 };
 
 static struct clk_regmap_mux_div apcs_mux_clk = {
@@ -354,6 +461,9 @@ static struct clk_regmap_mux_div apcs_mux_clk = {
 static const struct of_device_id match_table[] = {
 	{ .compatible = "qcom,sdxlemur-apsscc" },
 	{ .compatible = "qcom,sdxnightjar-apsscc" },
+	{ .compatible = "qcom,qcs404-apsscc" },
+	{ .compatible = "qcom,sdx55-apsscc" },
+	{ .compatible = "qcom,sdxpoorwills-apsscc" },
 	{}
 };
 
@@ -583,6 +693,76 @@ static void cpucc_sdxnightjar_fixup(void)
 				&apcs_cpu_alpha_pll_config);
 }
 
+static void cpucc_qcs404_fixup(void)
+{
+	cpu_clks_hws[APCS_CPU_PLL] = &apcs_cpu_pll_qcs404.clkr.hw;
+
+	/* GPLL0 as safe source Index */
+	apcs_mux_clk.safe_src = 4;
+	apcs_mux_clk.safe_div = 1;
+
+	apcs_mux_clk.clk_nb.notifier_call = cpucc_notifier_cb;
+	apcs_mux_clk.clkr.hw.init = &apcs_mux_clk_qcs404;
+
+	clk_pll_configure_sr(&apcs_cpu_pll_qcs404, apcs_cpu_pll_qcs404.clkr.regmap,
+			&apcs_cpu_pll_config_qcs404, false);
+
+	/* Configure USER_CTL value */
+	regmap_write(apcs_cpu_pll_qcs404.clkr.regmap,
+				apcs_cpu_pll_qcs404.config_reg, 0x0100000f);
+}
+
+static void cpucc_sdx55_fixup(void)
+{
+	apcs_cpu_pll.flags = SUPPORTS_NO_PLL_LATCH;
+	apcs_cpu_pll.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_LUCID];
+
+	apcs_cpu_pll.clkr.hw.init = &apcs_cpu_pll_sdx55;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_MIN] = 615000000;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_LOW] = 1066000000;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_LOW_L1] = 1600000000;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_NOMINAL] = 2000000000;
+
+	clk_lucid_pll_configure(&apcs_cpu_pll, apcs_cpu_pll.clkr.regmap,
+			&apcs_cpu_alpha_pll_config_sdx55);
+}
+
+static void cpucc_sdxpoorwills_fixup(void)
+{
+	apcs_cpu_pll.regs = clk_alpha_pll_regs[CLK_ALPHA_PLL_TYPE_TRION];
+
+	apcs_cpu_pll.clkr.hw.init = &apcs_cpu_pll_sdxpoorwills;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_LOWER] = 345600000;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_LOW] = 576000000;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_NOMINAL] = 1094400000;
+	apcs_cpu_pll.clkr.vdd_data.rate_max[VDD_HIGH] = 1497600000;
+
+	clk_trion_pll_configure(&apcs_cpu_pll, apcs_cpu_pll.clkr.regmap,
+					&apcs_cpu_alpha_pll_config_sdxpoorwills);
+}
+
+static int cpucc_get_and_parse_dt_resource_qcs404(struct platform_device *pdev)
+{
+	/* Rail Regulator for apcs_pll */
+	vdd_hf_pll.regulator[0] = devm_regulator_get(&pdev->dev, "vdd_hf_pll");
+	if (IS_ERR(vdd_hf_pll.regulator[0])) {
+		if (!(PTR_ERR(vdd_hf_pll.regulator[0]) == -EPROBE_DEFER))
+			dev_err(&pdev->dev,
+				"Unable to get vdd_hf_pll regulator\n");
+		return PTR_ERR(vdd_hf_pll.regulator[0]);
+	}
+
+	vdd_hf_pll.regulator[1] = devm_regulator_get(&pdev->dev, "vdd_dig_ao");
+	if (IS_ERR(vdd_hf_pll.regulator[1])) {
+		if (!(PTR_ERR(vdd_hf_pll.regulator[1]) == -EPROBE_DEFER))
+			dev_err(&pdev->dev,
+				"Unable to get vdd_dig_ao regulator\n");
+		return PTR_ERR(vdd_hf_pll.regulator[1]);
+	}
+
+	return 0;
+}
+
 static int cpucc_get_and_parse_dt_resource(struct platform_device *pdev,
 						unsigned long *xo_rate)
 {
@@ -590,8 +770,11 @@ static int cpucc_get_and_parse_dt_resource(struct platform_device *pdev,
 	struct device *dev = &pdev->dev;
 	struct clk *clk;
 	int ret, speed_bin, version;
+	bool is_qcs404;
 	char prop_name[] = "qcom,speedX-bin-vX";
 	void __iomem *base;
+	struct regmap *map;
+
 
 	/* Require the RPM-XO clock to be registered before */
 	clk = clk_get(dev, "bi_tcxo_ao");
@@ -612,17 +795,25 @@ static int cpucc_get_and_parse_dt_resource(struct platform_device *pdev,
 	if (IS_ERR(clk)) {
 		if (PTR_ERR(clk) != -EPROBE_DEFER)
 			dev_err(dev, "Unable to get GPLL0 clock\n");
-			return PTR_ERR(clk);
+		return PTR_ERR(clk);
 	}
 	clk_put(clk);
 
-	/* Rail Regulator for apcs_cpu_pll & cpuss mux*/
-	vdd_pll.regulator[0] = devm_regulator_get(&pdev->dev, "vdd-pll");
-	if (IS_ERR(vdd_pll.regulator[0])) {
-		if (!(PTR_ERR(vdd_pll.regulator[0]) == -EPROBE_DEFER))
-			dev_err(&pdev->dev,
-				"Unable to get vdd_pll regulator\n");
-		return PTR_ERR(vdd_pll.regulator[0]);
+	is_qcs404 = of_device_is_compatible(pdev->dev.of_node,
+						 "qcom,qcs404-apsscc");
+	if (is_qcs404) {
+		ret = cpucc_get_and_parse_dt_resource_qcs404(pdev);
+		if (ret)
+			return ret;
+	} else {
+		/* Rail Regulator for apcs_cpu_pll & cpuss mux*/
+		vdd_pll.regulator[0] = devm_regulator_get(&pdev->dev, "vdd-pll");
+		if (IS_ERR(vdd_pll.regulator[0])) {
+			if (!(PTR_ERR(vdd_pll.regulator[0]) == -EPROBE_DEFER))
+				dev_err(&pdev->dev,
+					"Unable to get vdd_pll regulator\n");
+			return PTR_ERR(vdd_pll.regulator[0]);
+		}
 	}
 
 	vdd_cpu.regulator[0] = devm_regulator_get(&pdev->dev, "cpu-vdd");
@@ -641,13 +832,19 @@ static int cpucc_get_and_parse_dt_resource(struct platform_device *pdev,
 	}
 
 	cpu_regmap_config.name = "apcs_pll";
-	apcs_cpu_pll.clkr.regmap = devm_regmap_init_mmio(dev, base,
-							&cpu_regmap_config);
-	if (IS_ERR(apcs_cpu_pll.clkr.regmap)) {
+	map = devm_regmap_init_mmio(dev, base, &cpu_regmap_config);
+	if (IS_ERR(map)) {
 		dev_err(&pdev->dev, "Couldn't get regmap for apcs_cpu_pll\n");
-		return PTR_ERR(apcs_cpu_pll.clkr.regmap);
+		return PTR_ERR(map);
 	}
-	apcs_cpu_pll.clkr.dev = &pdev->dev;
+
+	if (is_qcs404) {
+		apcs_cpu_pll_qcs404.clkr.regmap = map;
+		apcs_cpu_pll_qcs404.clkr.dev = &pdev->dev;
+	} else {
+		apcs_cpu_pll.clkr.regmap = map;
+		apcs_cpu_pll.clkr.dev = &pdev->dev;
+	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "apcs_cmd");
 	base = devm_ioremap_resource(dev, res);
@@ -693,7 +890,7 @@ static int cpucc_driver_probe(struct platform_device *pdev)
 	struct clk_hw_onecell_data *data;
 	struct device *dev = &pdev->dev;
 	int i, ret, cpu;
-	bool is_sdxnightjar;
+	bool is_sdxnightjar, is_qcs404, is_sdx55, is_sdxpoorwills;
 	unsigned long xo_rate;
 	u32 l_val;
 
@@ -703,10 +900,24 @@ static int cpucc_driver_probe(struct platform_device *pdev)
 
 	is_sdxnightjar = of_device_is_compatible(pdev->dev.of_node,
 						 "qcom,sdxnightjar-apsscc");
-
+	is_qcs404 = of_device_is_compatible(pdev->dev.of_node,
+						 "qcom,qcs404-apsscc");
+	is_sdx55 = of_device_is_compatible(pdev->dev.of_node,
+						 "qcom,sdx55-apsscc");
+	is_sdxpoorwills = of_device_is_compatible(pdev->dev.of_node,
+						 "qcom,sdxpoorwills-apsscc");
 	if (is_sdxnightjar) {
 		l_val = apcs_cpu_alpha_pll_config.l;
 		cpucc_sdxnightjar_fixup();
+	} else if (is_qcs404) {
+		l_val = apcs_cpu_pll_config_qcs404.l;
+		cpucc_qcs404_fixup();
+	} else if (is_sdx55) {
+		l_val = apcs_cpu_alpha_pll_config_sdx55.l;
+		cpucc_sdx55_fixup();
+	} else if (is_sdxpoorwills) {
+		l_val = apcs_cpu_alpha_pll_config_sdxpoorwills.l;
+		cpucc_sdxpoorwills_fixup();
 	} else {
 		l_val = apcs_cpu_pll_config.l;
 		clk_lucid_5lpe_pll_configure(&apcs_cpu_pll, apcs_cpu_pll.clkr.regmap,
@@ -736,7 +947,7 @@ static int cpucc_driver_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	if (is_sdxnightjar) {
+	if (is_sdxnightjar || is_qcs404) {
 		ret = clk_notifier_register(apcs_mux_clk.clkr.hw.clk,
 							&apcs_mux_clk.clk_nb);
 		if (ret) {

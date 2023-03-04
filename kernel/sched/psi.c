@@ -1091,7 +1091,6 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 	t->event = 0;
 	t->last_event_time = 0;
 	init_waitqueue_head(&t->event_wait);
-	kref_init(&t->refcount);
 
 	mutex_lock(&group->trigger_lock);
 
@@ -1195,49 +1194,10 @@ void psi_trigger_destroy(struct psi_trigger *t)
 	kfree(t);
 }
 
-
-/*void psi_trigger_replace(void **trigger_ptr, struct psi_trigger *new)
-{
-	struct psi_trigger *old = *trigger_ptr;
-
-	if (static_branch_likely(&psi_disabled))
-		return;
-
-	rcu_assign_pointer(*trigger_ptr, new);
-	if (old)
-		kref_put(&old->refcount, psi_trigger_destroy);
-}*/
-
 __poll_t psi_trigger_poll(void **trigger_ptr,
 				struct file *file, poll_table *wait)
 {
 	/*__poll_t ret = DEFAULT_POLLMASK;
-	struct psi_trigger *t;
-
-	if (static_branch_likely(&psi_disabled))
-		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
-
-	rcu_read_lock();
-
-	t = rcu_dereference(*(void __rcu __force **)trigger_ptr);
-	if (!t) {
-		rcu_read_unlock();
-		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
-	}
-	kref_get(&t->refcount);
-
-	rcu_read_unlock();
-
-	poll_wait(file, &t->event_wait, wait);
-
-	if (cmpxchg(&t->event, 1, 0) == 1)
-		ret |= EPOLLPRI;
-
-	kref_put(&t->refcount, psi_trigger_destroy);
-
-	return ret;*/
-
-	__poll_t ret = DEFAULT_POLLMASK;
 	struct psi_trigger *t;
 
 	if (static_branch_likely(&psi_disabled))

@@ -15,7 +15,9 @@
 
 #include "dm-verity.h"
 #include "dm-verity-fec.h"
+#include <linux/delay.h>
 #include "dm-verity-verify-sig.h"
+#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/reboot.h>
 
@@ -33,12 +35,24 @@
 #define DM_VERITY_OPT_IGN_ZEROES	"ignore_zero_blocks"
 #define DM_VERITY_OPT_AT_MOST_ONCE	"check_at_most_once"
 
-#define DM_VERITY_OPTS_MAX		(2 + DM_VERITY_OPTS_FEC + \
+#define DM_VERITY_OPTS_MAX		(4 + DM_VERITY_OPTS_FEC + \
 					 DM_VERITY_ROOT_HASH_VERIFICATION_OPTS)
 
 static unsigned dm_verity_prefetch_cluster = DM_VERITY_DEFAULT_PREFETCH_SIZE;
 
 module_param_named(prefetch_cluster, dm_verity_prefetch_cluster, uint, S_IRUGO | S_IWUSR);
+
+/*
+ * If rootwait parameter defined, wait for root device to be available
+ * before continuing with verity target
+ */
+static int dm_device_wait;
+static int __init dm_verity_root_wait_setup(char *s)
+{
+	dm_device_wait = 1;
+	return 0;
+}
+early_param("rootwait", dm_verity_root_wait_setup);
 
 struct dm_verity_prefetch_work {
 	struct work_struct work;
@@ -258,6 +272,13 @@ static int verity_handle_err(struct dm_verity *v, enum verity_block_type type,
 out:
 	if (v->mode == DM_VERITY_MODE_LOGGING)
 		return 0;
+
+	if (v->mode == DM_VERITY_MODE_EIO) {
+#ifdef CONFIG_DM_VERITY_AVB
+		dm_verity_avb_error_handler();
+#endif
+		kernel_halt();
+	}
 
 	if (v->mode == DM_VERITY_MODE_RESTART) {
 #ifdef CONFIG_DM_VERITY_AVB
@@ -922,13 +943,11 @@ static int verity_parse_opt_args(struct dm_arg_set *as, struct dm_verity *v,
 				return r;
 			}
 			continue;
-
 		} else if (!strcasecmp(arg_name, DM_VERITY_OPT_AT_MOST_ONCE)) {
 			r = verity_alloc_most_once(v);
 			if (r)
 				return r;
 			continue;
-
 		} else if (verity_is_fec_opt_arg(arg_name)) {
 			r = verity_fec_parse_opt_args(as, v, &argc, arg_name);
 			if (r)
@@ -1010,14 +1029,24 @@ static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 	v->version = num;
 
+retry_dev1:
 	r = dm_get_device(ti, argv[1], FMODE_READ, &v->data_dev);
 	if (r) {
+		if (r == -ENODEV && dm_device_wait) {
+			msleep(100);
+			goto retry_dev1;
+		}
 		ti->error = "Data device lookup failed";
 		goto bad;
 	}
 
+retry_dev2:
 	r = dm_get_device(ti, argv[2], FMODE_READ, &v->hash_dev);
 	if (r) {
+		if (r == -ENODEV && dm_device_wait) {
+			msleep(100);
+			goto retry_dev2;
+		}
 		ti->error = "Hash device lookup failed";
 		goto bad;
 	}
@@ -1229,6 +1258,7 @@ bad:
 
 static struct target_type verity_target = {
 	.name		= "verity",
+	.features	= DM_TARGET_IMMUTABLE,
 	.version	= {1, 5, 0},
 	.module		= THIS_MODULE,
 	.ctr		= verity_ctr,

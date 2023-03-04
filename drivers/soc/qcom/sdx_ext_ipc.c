@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- *
+ * Copyright (c) 2019,2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/delay.h>
@@ -13,12 +12,6 @@
 #include <linux/interrupt.h>
 #include <linux/suspend.h>
 #include <soc/qcom/sb_notification.h>
-
-#define GPIO_BASE 0xf100000
-#define GPIO_REG_OFFSET 0x1000
-#define GPIO_REG_SIZE 0x300000
-
-#define E911_GPIO_NUMBER 45
 
 #define STATUS_UP 1
 #define STATUS_DOWN 0
@@ -55,8 +48,6 @@ struct gpio_cntrl {
 	int status_irq;
 	int wakeup_irq;
 	int policy;
-	unsigned int ipq807x_attach;
-	void __iomem *gpio_base;
 	struct device *dev;
 	struct mutex policy_lock;
 	struct mutex e911_lock;
@@ -122,27 +113,15 @@ static DEVICE_ATTR_RW(policy);
 static ssize_t e911_show(struct device *dev, struct device_attribute *attr,
 				char *buf)
 {
-	int ret;
-	u32 state;
+	int ret, state;
 	struct gpio_cntrl *mdm = dev_get_drvdata(dev);
-	void __iomem *addr = NULL;
 
 	if (mdm->gpios[STATUS_OUT2] < 0)
 		return -ENXIO;
 
 	mutex_lock(&mdm->e911_lock);
-
-	if (mdm->ipq807x_attach) {
-		addr = mdm->gpio_base + GPIO_REG_OFFSET * E911_GPIO_NUMBER;
-		state = readl_relaxed(addr);
-		if (state == 0x3c7)
-			ret = scnprintf(buf, 2, "1\n");
-		else
-			ret = scnprintf(buf, 2, "0\n");
-	} else {
-		state = gpio_get_value(mdm->gpios[STATUS_OUT2]);
-		ret = scnprintf(buf, 2, "%d\n", state);
-	}
+	state = gpio_get_value(mdm->gpios[STATUS_OUT2]);
+	ret = scnprintf(buf, 2, "%d\n", state);
 	mutex_unlock(&mdm->e911_lock);
 
 	return ret;
@@ -152,7 +131,6 @@ static ssize_t e911_store(struct device *dev, struct device_attribute *attr,
 				const char *buf, size_t count)
 {
 	struct gpio_cntrl *mdm = dev_get_drvdata(dev);
-	void __iomem *addr = NULL;
 	int e911;
 
 	if (kstrtoint(buf, 0, &e911))
@@ -162,19 +140,10 @@ static ssize_t e911_store(struct device *dev, struct device_attribute *attr,
 		return -ENXIO;
 
 	mutex_lock(&mdm->e911_lock);
-
-	if (mdm->ipq807x_attach) {
-		addr = mdm->gpio_base + GPIO_REG_OFFSET * E911_GPIO_NUMBER;
-		if (e911)
-			writel_relaxed(0x3c7, addr);
-		else
-			writel_relaxed(0x4, addr);
-	} else {
-		if (e911)
-			gpio_set_value(mdm->gpios[STATUS_OUT2], 1);
-		else
-			gpio_set_value(mdm->gpios[STATUS_OUT2], 0);
-	}
+	if (e911)
+		gpio_set_value(mdm->gpios[STATUS_OUT2], 1);
+	else
+		gpio_set_value(mdm->gpios[STATUS_OUT2], 0);
 	mutex_unlock(&mdm->e911_lock);
 
 	return count;
@@ -327,7 +296,6 @@ static int setup_ipc(struct gpio_cntrl *mdm)
 static int sdx_ext_ipc_panic(struct notifier_block *this,
 				unsigned long event, void *ptr)
 {
-	void __iomem *addr = NULL;
 	struct gpio_cntrl *mdm = container_of(this,
 					struct gpio_cntrl, panic_blk);
 
@@ -354,13 +322,6 @@ static int sdx_ext_ipc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	mdm->dev = &pdev->dev;
-
-	of_property_read_u32(node, "ipq807x_attach", &mdm->ipq807x_attach);
-	if (mdm->ipq807x_attach) {
-		dev_info(mdm->dev, "IPQ807x attach detected\n");
-		mdm->gpio_base = ioremap(GPIO_BASE, GPIO_REG_SIZE);
-	}
-
 	ret = setup_ipc(mdm);
 	if (ret) {
 		dev_err(mdm->dev, "Error setting up gpios\n");
@@ -401,8 +362,8 @@ static int sdx_ext_ipc_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, mdm);
 
 	if (mdm->gpios[STATUS_IN] >= 0) {
-		ret = devm_request_irq(mdm->dev, mdm->status_irq,
-				ap_status_change,
+		ret = devm_request_threaded_irq(mdm->dev, mdm->status_irq,
+				NULL, ap_status_change, IRQF_ONESHOT |
 				IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING,
 				"ap status", mdm);
 		if (ret < 0) {
@@ -464,9 +425,6 @@ static int sdx_ext_ipc_remove(struct platform_device *pdev)
 						&mdm->panic_blk);
 	remove_ipc(mdm);
 	device_remove_file(mdm->dev, &dev_attr_policy);
-	if (mdm->ipq807x_attach)
-		iounmap(mdm->gpio_base);
-
 	return 0;
 }
 
@@ -497,6 +455,7 @@ static const struct dev_pm_ops sdx_ext_ipc_pm_ops = {
 
 static const struct of_device_id sdx_ext_ipc_of_match[] = {
 	{ .compatible = "qcom,sdx-ext-ipc"},
+	{ .compatible = "qcom,sa515m-ccard"},
 	{},
 };
 

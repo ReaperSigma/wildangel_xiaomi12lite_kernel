@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include "hab.h"
 
@@ -30,7 +31,11 @@ int hab_open_request_send(struct hab_open_request *request)
 	return physical_channel_send(request->pchan, &header, &request->xdata);
 }
 
-/* called when remote sends in open-request */
+/*
+ * called when remote sends in open-request.
+ * The sanity of the arg sizebytes is ensured by its caller hab_msg_recv.
+ * The sizebytes should be equal to sizeof(struct hab_open_send_data)
+ */
 int hab_open_request_add(struct physical_channel *pchan,
 			size_t sizebytes, int request_type)
 {
@@ -39,12 +44,6 @@ int hab_open_request_add(struct physical_channel *pchan,
 	struct hab_open_request *request;
 	struct timespec64 ts = {0};
 	int irqs_disabled = irqs_disabled();
-
-	if (sizebytes > HAB_HEADER_SIZE_MASK) {
-		pr_err("pchan %s request size too large %zd\n",
-			pchan->name, sizebytes);
-		return -EINVAL;
-	}
 
 	node = kzalloc(sizeof(*node), GFP_ATOMIC);
 	if (!node)
@@ -177,23 +176,21 @@ int hab_open_listen(struct uhab_context *ctx,
 	return ret;
 }
 
-/* called when receives remote's cancel init from FE or init-ack from BE */
+/*
+ * called when receiving remote's cancel init from FE or init-ack from BE.
+ * The sanity of the arg sizebytes is ensured by its caller hab_msg_recv.
+ * The sizebytes should be equal to sizeof(struct hab_open_send_data)
+ */
 int hab_open_receive_cancel(struct physical_channel *pchan,
 		size_t sizebytes)
 {
 	struct hab_device *dev = pchan->habdev;
-	struct hab_open_send_data data;
+	struct hab_open_send_data data = {0};
 	struct hab_open_request *request;
 	struct hab_open_node *node, *tmp;
 	int bfound = 0;
 	struct timespec64 ts = {0};
 	int irqs_disabled = irqs_disabled();
-
-	if (sizebytes > HAB_HEADER_SIZE_MASK) {
-		pr_err("pchan %s cancel size too large %zd\n",
-			pchan->name, sizebytes);
-		return -EINVAL;
-	}
 
 	if (physical_channel_read(pchan, &data, sizebytes) != sizebytes)
 		return -EIO;
@@ -208,6 +205,7 @@ int hab_open_receive_cancel(struct physical_channel *pchan,
 			(request->xdata.open_id == data.open_id) &&
 			(request->xdata.vchan_id == data.vchan_id)) {
 			list_del(&node->node);
+			kfree(node);
 			dev->openq_cnt--;
 			pr_info("open cancelled on pchan %s vcid %x subid %d openid %d\n",
 					pchan->name, data.vchan_id,

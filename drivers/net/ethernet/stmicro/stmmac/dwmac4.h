@@ -18,6 +18,8 @@
 #define GMAC_HASH_TAB(x)		(0x10 + (x) * 4)
 #define GMAC_VLAN_TAG			0x00000050
 #define GMAC_VLAN_HASH_TABLE		0x00000058
+#define GMAC_VLAN_CTRL_TAG		0x00000050
+#define GMAC_VLAN_DATA_TAG		0x00000054
 #define GMAC_RX_FLOW_CTRL		0x00000090
 #define GMAC_VLAN_INCL			0x00000060
 #define GMAC_QX_TX_FLOW_CTRL(x)		(0x70 + x * 4)
@@ -43,6 +45,20 @@
 #define GMAC_ARP_ADDR			0x00000210
 #define GMAC_ADDR_HIGH(reg)		(0x300 + reg * 8)
 #define GMAC_ADDR_LOW(reg)		(0x304 + reg * 8)
+#define GMAC_MTL_RX_QMAP		0x00000c30
+
+/*MAC VLAN CTRL Bit*/
+#define GMAC_VLANTR_OB_MASK			(0x1)
+#define GMAC_VLANTR_CT_MASKBIT			BIT(1)
+#define GMAC_VLANTR_OFFSET_SHIFT		2
+#define GMAC_VLANTR_VLAN_EN			BIT(16)
+#define GMAC_VLANTR_VLAN_CMP			BIT(17)
+#define GMAC_VLANTR_VLAN_CMP_DISABLE		BIT(18)
+#define GMAC_VLANTR_DMA_CHAN_EN			BIT(24)
+#define GMAC_VLANTR_DMA_CHAN_NUM		25
+
+/*MTL Rx Queue Bit*/
+#define GMAC_MTL_RXQ_DMACH		BIT(4)
 
 /* RX Queues Routing */
 #define GMAC_RXQCTRL_AVCPQ_MASK		GENMASK(2, 0)
@@ -248,9 +264,13 @@ enum power_event {
 #define MTL_RXQ_DMA_Q04MDMACH(x)	((x) << 0)
 #define MTL_RXQ_DMA_QXMDMACH_MASK(x)	GENMASK(11 + (8 * ((x) - 1)), 8 * (x))
 #define MTL_RXQ_DMA_QXMDMACH(chan, q)	((chan) << (8 * (q)))
-
+#ifdef CONFIG_DWMAC_QCOM_VER3
+#define MTL_CHAN_BASE_ADDR		0x00008000
+#define MTL_CHAN_BASE_OFFSET		0x1000
+#else
 #define MTL_CHAN_BASE_ADDR		0x00000d00
 #define MTL_CHAN_BASE_OFFSET		0x40
+#endif
 #define MTL_CHANX_BASE_ADDR(x)		(MTL_CHAN_BASE_ADDR + \
 					(x * MTL_CHAN_BASE_OFFSET))
 
@@ -291,6 +311,8 @@ enum power_event {
 #define MTL_OP_MODE_RFA_SHIFT		8
 
 #define MTL_OP_MODE_EHFC		BIT(7)
+#define MTL_OP_MODE_FEP			BIT(4)
+#define MTL_OP_MODE_FUP			BIT(3)
 
 #define MTL_OP_MODE_RTC_MASK		0x18
 #define MTL_OP_MODE_RTC_SHIFT		3
@@ -301,8 +323,13 @@ enum power_event {
 #define MTL_OP_MODE_RTC_128		(3 << MTL_OP_MODE_RTC_SHIFT)
 
 /* MTL ETS Control register */
+#ifdef CONFIG_DWMAC_QCOM_VER3
+#define MTL_ETS_CTRL_BASE_ADDR		0x00008010
+#define MTL_ETS_CTRL_BASE_OFFSET	0x1000
+#else
 #define MTL_ETS_CTRL_BASE_ADDR		0x00000d10
 #define MTL_ETS_CTRL_BASE_OFFSET	0x40
+#endif
 #define MTL_ETSX_CTRL_BASE_ADDR(x)	(MTL_ETS_CTRL_BASE_ADDR + \
 					((x) * MTL_ETS_CTRL_BASE_OFFSET))
 
@@ -310,31 +337,51 @@ enum power_event {
 #define MTL_ETS_CTRL_AVALG		BIT(2)
 
 /* MTL Queue Quantum Weight */
+#ifdef CONFIG_DWMAC_QCOM_VER3
+#define MTL_TXQ_WEIGHT_BASE_ADDR	0x00008018
+#define MTL_TXQ_WEIGHT_BASE_OFFSET	0x1000
+#else
 #define MTL_TXQ_WEIGHT_BASE_ADDR	0x00000d18
 #define MTL_TXQ_WEIGHT_BASE_OFFSET	0x40
+#endif
 #define MTL_TXQX_WEIGHT_BASE_ADDR(x)	(MTL_TXQ_WEIGHT_BASE_ADDR + \
 					((x) * MTL_TXQ_WEIGHT_BASE_OFFSET))
 #define MTL_TXQ_WEIGHT_ISCQW_MASK	GENMASK(20, 0)
 
 /* MTL sendSlopeCredit register */
+#ifdef CONFIG_DWMAC_QCOM_VER3
+#define MTL_SEND_SLP_CRED_BASE_ADDR	0x0000801c
+#define MTL_SEND_SLP_CRED_OFFSET	0x1000
+#else
 #define MTL_SEND_SLP_CRED_BASE_ADDR	0x00000d1c
 #define MTL_SEND_SLP_CRED_OFFSET	0x40
+#endif
 #define MTL_SEND_SLP_CREDX_BASE_ADDR(x)	(MTL_SEND_SLP_CRED_BASE_ADDR + \
 					((x) * MTL_SEND_SLP_CRED_OFFSET))
 
 #define MTL_SEND_SLP_CRED_SSC_MASK	GENMASK(13, 0)
 
 /* MTL hiCredit register */
+#ifdef CONFIG_DWMAC_QCOM_VER3
+#define MTL_HIGH_CRED_BASE_ADDR		0x00008020
+#define MTL_HIGH_CRED_OFFSET		0x1000
+#else
 #define MTL_HIGH_CRED_BASE_ADDR		0x00000d20
 #define MTL_HIGH_CRED_OFFSET		0x40
+#endif
 #define MTL_HIGH_CREDX_BASE_ADDR(x)	(MTL_HIGH_CRED_BASE_ADDR + \
 					((x) * MTL_HIGH_CRED_OFFSET))
 
 #define MTL_HIGH_CRED_HC_MASK		GENMASK(28, 0)
 
 /* MTL loCredit register */
+#ifdef CONFIG_DWMAC_QCOM_VER3
+#define MTL_LOW_CRED_BASE_ADDR		0x00008024
+#define MTL_LOW_CRED_OFFSET		0x1000
+#else
 #define MTL_LOW_CRED_BASE_ADDR		0x00000d24
 #define MTL_LOW_CRED_OFFSET		0x40
+#endif
 #define MTL_LOW_CREDX_BASE_ADDR(x)	(MTL_LOW_CRED_BASE_ADDR + \
 					((x) * MTL_LOW_CRED_OFFSET))
 

@@ -193,17 +193,28 @@ struct plat_stmmacenet_data {
 	int mac_port_sel_speed;
 	bool en_tx_lpi_clockgating;
 	int has_xgmac;
+	bool phyad_change;
+	bool is_gpio_phy_reset;
 	u16	(*tx_select_queue)
 		(struct net_device *dev, struct sk_buff *skb,
 		 struct net_device *sb_dev);
 	unsigned int (*get_plat_tx_coal_frames)
 		(struct sk_buff *skb);
+	int mac2mac_rgmii_speed;
+	bool mac2mac_en;
+	int mac2mac_link;
 	bool early_eth;
 	struct emac_emb_smmu_cb_ctx stmmac_emb_smmu_ctx;
 	bool phy_intr_en_extn_stm;
+	int (*handle_mac_err)(void *priv, int type, int chan);
 	int (*handle_prv_ioctl)(struct net_device *dev, struct ifreq *ifr,
 				int cmd);
 	void (*request_phy_wol)(void *plat);
 	int (*init_pps)(void *priv);
+	bool phy_intr_en;
+	int (*phy_intr_enable)(void *priv);
+	void (*phy_irq_enable)(void *priv);
+	void (*phy_irq_disable)(void *priv);
+	bool sph_disable;
 };
 #endif

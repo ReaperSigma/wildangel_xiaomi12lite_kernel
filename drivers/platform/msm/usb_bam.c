@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2011-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -334,9 +334,15 @@ static int usb_bam_alloc_buffer(struct usb_bam_pipe_connect *pipe_connect)
 		memset_io(data_buf->base, 0, data_buf->size);
 		data_buf->iova = dma_map_resource(dev, data_buf->phys_base,
 					data_buf->size, DMA_BIDIRECTIONAL, 0);
-		if (dma_mapping_error(dev, data_buf->iova))
+		if (dma_mapping_error(dev, data_buf->iova)) {
 			log_event_err("%s(): oci_mem: err mapping data_buf\n",
 								__func__);
+			iounmap(data_buf->base);
+			data_buf->base = NULL;
+			ret = -ENOMEM;
+			goto err_exit;
+		}
+
 		log_event_dbg("%s: data_buf:%s virt:%pK, phys:%lx, iova:%lx\n",
 			__func__, dev_name(dev), data_buf->base,
 			(unsigned long)data_buf->phys_base, data_buf->iova);
@@ -348,7 +354,11 @@ static int usb_bam_alloc_buffer(struct usb_bam_pipe_connect *pipe_connect)
 		if (!desc_buf->base) {
 			log_event_err("%s: ioremap failed for desc fifo\n",
 					__func__);
+			dma_unmap_resource(dev, data_buf->iova,
+					data_buf->size,
+					DMA_BIDIRECTIONAL, 0);
 			iounmap(data_buf->base);
+			data_buf->base = NULL;
 			ret = -ENOMEM;
 			goto err_exit;
 		}
@@ -356,9 +366,19 @@ static int usb_bam_alloc_buffer(struct usb_bam_pipe_connect *pipe_connect)
 		desc_buf->iova = dma_map_resource(dev, desc_buf->phys_base,
 					desc_buf->size,
 					DMA_BIDIRECTIONAL, 0);
-		if (dma_mapping_error(dev, desc_buf->iova))
+		if (dma_mapping_error(dev, desc_buf->iova)) {
 			log_event_err("%s(): oci_mem: err mapping desc_buf\n",
 								__func__);
+			dma_unmap_resource(dev, data_buf->iova,
+					data_buf->size,
+					DMA_BIDIRECTIONAL, 0);
+			iounmap(data_buf->base);
+			data_buf->base = NULL;
+			iounmap(desc_buf->base);
+			desc_buf->base = NULL;
+			ret = -ENOMEM;
+			goto err_exit;
+		}
 
 		log_event_dbg("%s: desc_buf:%s virt:%pK, phys:%lx, iova:%lx\n",
 			__func__, dev_name(dev), desc_buf->base,
@@ -594,6 +614,7 @@ error:
 	sps_disconnect(*pipe);
 free_sps_endpoint:
 	sps_free_endpoint(*pipe);
+	*pipe = NULL;
 	return ret;
 }
 
@@ -1280,7 +1301,7 @@ static struct notifier_block usb_bam_panic_blk = {
 	.notifier_call  = usb_bam_panic_notifier,
 };
 
-void usb_bam_register_panic_hdlr(void)
+static void usb_bam_register_panic_hdlr(void)
 {
 	atomic_notifier_chain_register(&panic_notifier_list,
 			&usb_bam_panic_blk);

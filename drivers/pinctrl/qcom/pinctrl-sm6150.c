@@ -1574,7 +1574,7 @@ static const struct msm_gpio_wakeirq_map sm6150_pdc_map[] = {
 	{ 13, 33 }, { 14, 35 }, { 17, 46 }, { 19, 48 }, { 21, 83 },
 	{ 22, 36 }, { 26, 38 }, { 35, 37 }, { 39, 118 }, { 41, 47 },
 	{ 47, 49 }, { 48, 51 }, { 50, 52 }, { 51, 116 }, { 55, 56 },
-	{ 56, 57 }, { 57, 58 }, { 60, 60 }, { 71, 54 }, { 80, 73 },
+	{ 56, 57 }, { 57, 58 }, { 60, 60 }, { 71, 54 }, { 76, 79 }, { 80, 73 },
 	{ 81, 64 }, { 82, 50 }, { 83, 65 }, { 84, 92 }, { 85, 99 },
 	{ 86, 67 }, { 87, 84 }, { 88, 117 }, { 89, 115 }, { 90, 69 },
 	{ 92, 88}, { 93, 75 }, { 94, 91 }, { 95, 72 }, { 96, 82 },
@@ -1608,9 +1608,9 @@ static struct msm_pinctrl_soc_data sm6150_pinctrl = {
 	.wakeirq_map = sm6150_pdc_map,
 	.nwakeirq_map = ARRAY_SIZE(sm6150_pdc_map),
 	.dir_conn = sm6150_dir_conn,
+	.ntiles = NUM_TILES,
 #ifdef CONFIG_HIBERNATION
 	.dir_conn_addr = tile_dir_conn_addr,
-	.tile_count = ARRAY_SIZE(tile_dir_conn_addr),
 #endif
 };
 
@@ -1650,6 +1650,37 @@ static int sm6150_pinctrl_gpio_irq_map_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int sm6150_pinctrl_dirconn_list_probe(struct platform_device *pdev)
+{
+	int ret, n, dirconn_list_count, m;
+	struct device_node *np = pdev->dev.of_node;
+
+	n = of_property_count_elems_of_size(np, "qcom,dirconn-list",
+					sizeof(u32));
+	if (n <= 0 || n % 2)
+		return -EINVAL;
+
+	m = ARRAY_SIZE(sm6150_dir_conn) - 1;
+
+	dirconn_list_count = n / 2;
+
+	for (n = 0; n < dirconn_list_count; n++) {
+		ret = of_property_read_u32_index(np, "qcom,dirconn-list",
+						n * 2 + 0,
+						&sm6150_dir_conn[m].gpio);
+		if (ret)
+			return ret;
+		ret = of_property_read_u32_index(np, "qcom,dirconn-list",
+						n * 2 + 1,
+						&sm6150_dir_conn[m].irq);
+		if (ret)
+			return ret;
+		m--;
+	}
+
+	return 0;
+}
+
 static int sm6150_pinctrl_probe(struct platform_device *pdev)
 {
 	int len, ret;
@@ -1659,6 +1690,15 @@ static int sm6150_pinctrl_probe(struct platform_device *pdev)
 		if (ret) {
 			dev_err(&pdev->dev,
 				"Unable to parse GPIO IRQ map\n");
+			return ret;
+		}
+	}
+
+	if (of_find_property(pdev->dev.of_node, "qcom,dirconn-list", &len)) {
+		ret = sm6150_pinctrl_dirconn_list_probe(pdev);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"Unable to parse Direct Connect List\n");
 			return ret;
 		}
 	}

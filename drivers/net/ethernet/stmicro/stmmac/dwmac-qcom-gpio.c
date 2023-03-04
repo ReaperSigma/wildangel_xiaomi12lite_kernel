@@ -55,7 +55,7 @@ static int setup_gpio_input_common
 	return ret;
 }
 
-int ethqos_init_reqgulators(struct qcom_ethqos *ethqos)
+int ethqos_init_regulators(struct qcom_ethqos *ethqos)
 {
 	int ret = 0;
 
@@ -78,25 +78,6 @@ int ethqos_init_reqgulators(struct qcom_ethqos *ethqos)
 	}
 
 	if (of_property_read_bool(ethqos->pdev->dev.of_node,
-				  "vreg_rgmii-supply")) {
-		ethqos->reg_rgmii =
-		devm_regulator_get(&ethqos->pdev->dev, EMAC_VREG_RGMII_NAME);
-		if (IS_ERR(ethqos->reg_rgmii)) {
-			ETHQOSERR("Can not get <%s>\n", EMAC_VREG_RGMII_NAME);
-			return PTR_ERR(ethqos->reg_rgmii);
-		}
-
-		ret = regulator_enable(ethqos->reg_rgmii);
-		if (ret) {
-			ETHQOSERR("Can not enable <%s>\n",
-				  EMAC_VREG_RGMII_NAME);
-			goto reg_error;
-		}
-
-		ETHQOSDBG("Enabled <%s>\n", EMAC_VREG_RGMII_NAME);
-	}
-
-	if (of_property_read_bool(ethqos->pdev->dev.of_node,
 				  "vreg_emac_phy-supply")) {
 		ethqos->reg_emac_phy =
 		devm_regulator_get(&ethqos->pdev->dev, EMAC_VREG_EMAC_PHY_NAME);
@@ -104,6 +85,31 @@ int ethqos_init_reqgulators(struct qcom_ethqos *ethqos)
 			ETHQOSERR("Can not get <%s>\n",
 				  EMAC_VREG_EMAC_PHY_NAME);
 			return PTR_ERR(ethqos->reg_emac_phy);
+		}
+
+		if (ethqos->emac_ver == EMAC_HW_v3_0_0_RG) {
+			ret = regulator_set_load(ethqos->reg_emac_phy, 100);
+			if (ret < 0) {
+				ETHQOSERR("Unable to set load for PHY regulator\n");
+				goto reg_error;
+			}
+		}
+
+		if (ethqos->phyad_change) {
+			/* Specific load needs to be voted for vreg_emac_phy-supply in this case*/
+			ret = regulator_set_load(ethqos->reg_emac_phy, 1000);
+			if (ret < 0) {
+				ETHQOSERR("Unable to set HPM of vreg_emac_phy:%d\n", ret);
+				goto reg_error;
+			}
+
+			/* Voting specific voltage for vreg_emac_phy-supply in this case*/
+			ret = regulator_set_voltage(ethqos->reg_emac_phy, ethqos->phyvoltage_min,
+						    ethqos->phyvoltage_max);
+			if (ret) {
+				ETHQOSERR("Unable to set voltage for vreg_emac_phy:%d\n", ret);
+				goto reg_error;
+			}
 		}
 
 		ret = regulator_enable(ethqos->reg_emac_phy);
@@ -134,6 +140,26 @@ int ethqos_init_reqgulators(struct qcom_ethqos *ethqos)
 		}
 
 		ETHQOSDBG("Enabled <%s>\n", EMAC_VREG_RGMII_IO_PADS_NAME);
+	}
+
+	if (of_property_read_bool(ethqos->pdev->dev.of_node,
+				  "vreg_rgmii-supply") && (2500000 ==
+		   regulator_get_voltage(ethqos->reg_rgmii_io_pads))) {
+		ethqos->reg_rgmii =
+		devm_regulator_get(&ethqos->pdev->dev, EMAC_VREG_RGMII_NAME);
+		if (IS_ERR(ethqos->reg_rgmii)) {
+			ETHQOSERR("Can not get <%s>\n", EMAC_VREG_RGMII_NAME);
+			return PTR_ERR(ethqos->reg_rgmii);
+		}
+
+		ret = regulator_enable(ethqos->reg_rgmii);
+		if (ret) {
+			ETHQOSERR("Can not enable <%s>\n",
+				  EMAC_VREG_RGMII_NAME);
+			goto reg_error;
+		}
+
+		ETHQOSDBG("Enabled <%s>\n", EMAC_VREG_RGMII_NAME);
 	}
 
 	return ret;
@@ -167,6 +193,77 @@ void ethqos_disable_regulators(struct qcom_ethqos *ethqos)
 	}
 }
 
+void ethqos_reset_phy_enable_interrupt(struct qcom_ethqos *ethqos)
+{
+	struct stmmac_priv *priv = qcom_ethqos_get_priv(ethqos);
+
+	/* reset the phy so that it's ready */
+	if (priv->mii) {
+		ETHQOSERR("do mdio reset\n");
+		stmmac_mdio_reset(priv->mii);
+	}
+
+	if (priv->plat->phy_intr_en_extn_stm && priv->plat->phy_intr_en) {
+		priv->phydev->irq = PHY_IGNORE_INTERRUPT;
+		priv->phydev->interrupts = PHY_INTERRUPT_ENABLED;
+	}
+
+	phylink_connect_phy(priv->phylink, priv->phydev);
+
+	if (priv->plat->phy_intr_en_extn_stm && priv->plat->phy_intr_en) {
+		if (priv->phydev->drv->ack_interrupt &&
+		    !priv->phydev->drv->ack_interrupt(priv->phydev)) {
+			pr_info(" qcom-ethqos: %s ack_interrupt successful aftre connect\n",
+				__func__);
+		} else {
+			pr_err(" qcom-ethqos: %s ack_interrupt failed aftre connect\n",
+			       __func__);
+		}
+
+		if (priv->phydev->drv &&
+		    priv->phydev->drv->config_intr &&
+		    !priv->phydev->drv->config_intr(priv->phydev)) {
+			pr_err(" qcom-ethqos: %s config_phy_intr successful aftre connect\n",
+			       __func__);
+			priv->plat->request_phy_wol(priv->plat);
+		}
+	} else {
+		pr_info("stmmac phy polling mode\n");
+		priv->phydev->irq = PHY_POLL;
+	}
+
+}
+
+int ethqos_phy_power_on(struct qcom_ethqos *ethqos)
+{
+	int ret = 0;
+
+	if (ethqos->reg_emac_phy) {
+		ret = regulator_enable(ethqos->reg_emac_phy);
+		if (ret) {
+			ETHQOSERR("Can not enable <%s>\n",
+				  EMAC_VREG_EMAC_PHY_NAME);
+			return ret;
+		}
+		ethqos->phy_state = PHY_IS_ON;
+	} else {
+		ETHQOSERR("reg_emac_phy is NULL\n");
+	}
+	return ret;
+}
+
+void  ethqos_phy_power_off(struct qcom_ethqos *ethqos)
+{
+	if (ethqos->reg_emac_phy) {
+		if (regulator_is_enabled(ethqos->reg_emac_phy)) {
+			regulator_disable(ethqos->reg_emac_phy);
+			ethqos->phy_state = PHY_IS_OFF;
+		}
+	} else {
+		ETHQOSERR("reg_emac_phy is NULL\n");
+	}
+}
+
 void ethqos_free_gpios(struct qcom_ethqos *ethqos)
 {
 	if (gpio_is_valid(ethqos->gpio_phy_intr_redirect))
@@ -174,7 +271,7 @@ void ethqos_free_gpios(struct qcom_ethqos *ethqos)
 	ethqos->gpio_phy_intr_redirect = -1;
 }
 
-int ethqos_init_pinctrl(struct device *dev)
+static int ethqos_init_pinctrl(struct device *dev, struct qcom_ethqos *ethqos)
 {
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pinctrl_state;
@@ -189,11 +286,13 @@ int ethqos_init_pinctrl(struct device *dev)
 		ETHQOSERR("Failed to get pinctrl, err = %d\n", ret);
 		return ret;
 	}
+	ethqos->pinctrl = pinctrl;
+	ethqos->rgmii_txc_suspend_state = NULL;
+	ethqos->rgmii_txc_resume_state = NULL;
 
 	num_names = of_property_count_strings(dev->of_node, "pinctrl-names");
 	if (num_names < 0) {
-		dev_err(dev, "Cannot parse pinctrl-names: %d\n",
-			num_names);
+		dev_err(dev, "Cannot parse pinctrl-names: %d\n", num_names);
 		return num_names;
 	}
 
@@ -214,6 +313,16 @@ int ethqos_init_pinctrl(struct device *dev)
 
 		ETHQOSDBG("pinctrl_lookup_state %s succeded\n", name);
 
+		if (!strcmp(name, "dev-emac-rgmii_txc_suspend_state")) {
+			ethqos->rgmii_txc_suspend_state = pinctrl_state;
+			ETHQOSINFO("pinctrl_lookup_state %s succeded\n", name);
+			continue;
+		} else if (!strcmp(name, "dev-emac-rgmii_txc_resume_state")) {
+			ethqos->rgmii_txc_resume_state = pinctrl_state;
+			ETHQOSINFO("pinctrl_lookup_state %s succeded\n", name);
+			continue;
+		}
+
 		ret = pinctrl_select_state(pinctrl, pinctrl_state);
 		if (ret) {
 			ETHQOSERR("select_state %s failed %d\n", name, ret);
@@ -232,7 +341,7 @@ int ethqos_init_gpio(struct qcom_ethqos *ethqos)
 
 	ethqos->gpio_phy_intr_redirect = -1;
 
-	ret = ethqos_init_pinctrl(&ethqos->pdev->dev);
+	ret = ethqos_init_pinctrl(&ethqos->pdev->dev, ethqos);
 	if (ret) {
 		ETHQOSERR("ethqos_init_pinctrl failed");
 		return ret;
