@@ -15,10 +15,9 @@ int seb_rpmsg_tx_msg(void  *msg, size_t len)
 {
 	int ret = 0;
 
-	if (pdev == NULL || !pdev->chnl_state) {
+	if (pdev == NULL || !pdev->chnl_state)
 		pr_err("pmsg_device is null, channel is closed\n");
-		return -ENETRESET;
-	}
+
 	pdev->message = msg;
 	pdev->message_length = len;
 	if (pdev->message != NULL) {
@@ -78,7 +77,7 @@ static int seb_rpmsg_cb(struct rpmsg_device *rpdev,
 }
 
 static const struct rpmsg_device_id rpmsg_driver_seb_id_table[] = {
-	{ "slate-event" },
+	{ "slate_event" },
 	{},
 };
 MODULE_DEVICE_TABLE(rpmsg, rpmsg_driver_seb_id_table);
@@ -94,7 +93,7 @@ static struct rpmsg_driver rpmsg_seb_client = {
 	.callback = seb_rpmsg_cb,
 	.remove = seb_rpmsg_remove,
 	.drv = {
-		.name = "qcom,seb_rpmsg",
+		.name = "qcom,slate-events-bridge-rpmsg",
 		.of_match_table = rpmsg_driver_seb_of_match,
 	},
 };

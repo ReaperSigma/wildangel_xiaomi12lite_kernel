@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, 2021, The Linux Foundation.
+ * All rights reserved.
  */
 
 #define pr_fmt(fmt) "icnss2: " fmt
@@ -43,13 +44,11 @@
 #include <soc/qcom/ramdump.h>
 #include <linux/soc/qcom/smem.h>
 #include <linux/soc/qcom/smem_state.h>
-#include <trace/events/trace_msm_ssr_event.h>
 #include "main.h"
 #include "qmi.h"
 #include "debug.h"
 #include "power.h"
 #include "genl.h"
-#include "../slatecom_interface.h"
 
 #define MAX_PROP_SIZE			32
 #define NUM_LOG_PAGES			10
@@ -73,16 +72,7 @@
 #define ICNSS_BDF_TYPE_DEFAULT         ICNSS_BDF_ELF
 
 #define PROBE_TIMEOUT                 15000
-
-#ifdef CONFIG_ICNSS2_DEBUG
-static unsigned long qmi_timeout = 3000;
-module_param(qmi_timeout, ulong, 0600);
-#define WLFW_TIMEOUT                    msecs_to_jiffies(qmi_timeout)
-#else
-#define WLFW_TIMEOUT                    msecs_to_jiffies(3000)
-#endif
-
-#define ICNSS_RECOVERY_TIMEOUT		60000
+#define WLFW_TIMEOUT			msecs_to_jiffies(3000)
 
 static struct icnss_priv *penv;
 static struct work_struct wpss_loader;
@@ -197,8 +187,6 @@ char *icnss_driver_event_to_str(enum icnss_driver_event_type type)
 		return "M3_DUMP_UPLOAD";
 	case ICNSS_DRIVER_EVENT_QDSS_TRACE_REQ_DATA:
 		return "QDSS_TRACE_REQ_DATA";
-	case ICNSS_DRIVER_EVENT_SUBSYS_RESTART_LEVEL:
-		return "SUBSYS_RESTART_LEVEL";
 	case ICNSS_DRIVER_EVENT_MAX:
 		return "EVENT_MAX";
 	}
@@ -402,17 +390,6 @@ bool icnss_is_fw_down(void)
 }
 EXPORT_SYMBOL(icnss_is_fw_down);
 
-unsigned long icnss_get_device_config(void)
-{
-	struct icnss_priv *priv = icnss_get_plat_priv();
-
-	if (!priv)
-		return 0;
-
-	return priv->device_config;
-}
-EXPORT_SYMBOL(icnss_get_device_config);
-
 bool icnss_is_rejuvenate(void)
 {
 	if (!penv)
@@ -430,15 +407,6 @@ bool icnss_is_pdr(void)
 		return test_bit(ICNSS_PDR, &penv->state);
 }
 EXPORT_SYMBOL(icnss_is_pdr);
-
-bool icnss_is_low_power(void)
-{
-	if (!penv)
-		return false;
-	else
-		return test_bit(ICNSS_LOW_POWER, &penv->state);
-}
-EXPORT_SYMBOL(icnss_is_low_power);
 
 static irqreturn_t fw_error_fatal_handler(int irq, void *ctx)
 {
@@ -609,24 +577,11 @@ qmi_send:
 	return ret;
 }
 
-static enum wlfw_wlan_rf_subtype_v01 icnss_rf_subtype_value_to_type(u32 val)
-{
-	switch (val) {
-	case WLAN_RF_SLATE:
-		return WLFW_WLAN_RF_SLATE_V01;
-	case WLAN_RF_APACHE:
-		return WLFW_WLAN_RF_APACHE_V01;
-	default:
-		return WLFW_WLAN_RF_SUBTYPE_MAX_VAL_V01;
-	}
-}
-
 static int icnss_driver_event_server_arrive(struct icnss_priv *priv,
 						 void *data)
 {
 	int ret = 0;
 	bool ignore_assert = false;
-	enum wlfw_wlan_rf_subtype_v01 rf_subtype;
 
 	if (!priv)
 		return -ENODEV;
@@ -648,18 +603,6 @@ static int icnss_driver_event_server_arrive(struct icnss_priv *priv,
 
 	set_bit(ICNSS_WLFW_CONNECTED, &priv->state);
 
-	if (priv->is_slate_rfa) {
-		if (!test_bit(ICNSS_SLATE_UP, &priv->state)) {
-			reinit_completion(&priv->slate_boot_complete);
-			icnss_pr_dbg("Waiting for slate boot up notification, 0x%lx\n",
-				     priv->state);
-			wait_for_completion(&priv->slate_boot_complete);
-		}
-
-		send_wlan_state(GMI_MGR_WLAN_BOOT_INIT);
-		icnss_pr_info("sent wlan boot init command\n");
-	}
-
 	ret = wlfw_ind_register_send_sync_msg(priv);
 	if (ret < 0) {
 		if (ret == -EALREADY) {
@@ -668,19 +611,6 @@ static int icnss_driver_event_server_arrive(struct icnss_priv *priv,
 		}
 		ignore_assert = true;
 		goto fail;
-	}
-
-	if (priv->is_rf_subtype_valid) {
-		rf_subtype = icnss_rf_subtype_value_to_type(priv->rf_subtype);
-		if (rf_subtype != WLFW_WLAN_RF_SUBTYPE_MAX_VAL_V01) {
-			ret = wlfw_wlan_hw_init_cfg_msg(priv, rf_subtype);
-			if (ret < 0)
-				icnss_pr_dbg("Sending rf_subtype failed ret %d\n",
-					     ret);
-		} else {
-			icnss_pr_dbg("Invalid rf subtype %d in DT\n",
-				     priv->rf_subtype);
-		}
 	}
 
 	if (priv->device_id == WCN6750_DEVICE_ID) {
@@ -714,16 +644,6 @@ static int icnss_driver_event_server_arrive(struct icnss_priv *priv,
 		ignore_assert = true;
 		goto fail;
 	}
-
-	/*
-	 * If no_vote_on_wifi_active parameter is set for any regulator then
-	 * it will not be enabled from icnss_hw_power_on().
-	 *
-	 * Enable all regulators whose no_vote_on_wifi_active parameter is set.
-	 * For those regulators which have not set this parameter are enabled
-	 * from icnss_hw_power_on().
-	 */
-	icnss_enable_regulator(priv);
 
 	ret = icnss_hw_power_on(priv);
 	if (ret)
@@ -779,9 +699,6 @@ static int icnss_driver_event_server_arrive(struct icnss_priv *priv,
 	if (priv->vbatt_supported)
 		icnss_init_vph_monitor(priv);
 
-	if (priv->psf_supported)
-		queue_work(priv->soc_update_wq, &priv->soc_update_work);
-
 	return ret;
 
 device_info_failure:
@@ -804,9 +721,6 @@ static int icnss_driver_event_server_exit(struct icnss_priv *priv)
 	if (priv->adc_tm_dev && priv->vbatt_supported)
 		adc_tm_disable_chan_meas(priv->adc_tm_dev,
 					  &priv->vph_monitor_params);
-
-	if (priv->psf_supported)
-		priv->last_updated_voltage = 0;
 
 	return 0;
 }
@@ -881,7 +795,6 @@ static int icnss_pd_restart_complete(struct icnss_priv *priv)
 	clear_bit(ICNSS_PDR, &priv->state);
 	clear_bit(ICNSS_REJUVENATE, &priv->state);
 	clear_bit(ICNSS_PD_RESTART, &priv->state);
-	clear_bit(ICNSS_LOW_POWER, &priv->state);
 	priv->early_crash_ind = false;
 	priv->is_ssr = false;
 
@@ -935,9 +848,6 @@ static int icnss_driver_event_fw_ready_ind(struct icnss_priv *priv, void *data)
 	if (!priv)
 		return -ENODEV;
 
-	if (priv->device_id == ADRASTEA_DEVICE_ID)
-		del_timer(&priv->recovery_timer);
-
 	set_bit(ICNSS_FW_READY, &priv->state);
 	clear_bit(ICNSS_MODE_ON, &priv->state);
 	atomic_set(&priv->soc_wake_ref_count, 0);
@@ -953,11 +863,6 @@ static int icnss_driver_event_fw_ready_ind(struct icnss_priv *priv, void *data)
 		icnss_pr_err("Device is not ready\n");
 		ret = -ENODEV;
 		goto out;
-	}
-
-	if (priv->is_slate_rfa && test_bit(ICNSS_SLATE_UP, &priv->state)) {
-		send_wlan_state(GMI_MGR_WLAN_BOOT_COMPLETE);
-		icnss_pr_info("sent wlan boot complete command\n");
 	}
 
 	if (test_bit(ICNSS_PD_RESTART, &priv->state)) {
@@ -1177,25 +1082,6 @@ static int icnss_qdss_trace_req_data_hdlr(struct icnss_priv *priv,
 					     event_data->total_size);
 
 	kfree(data);
-	return ret;
-}
-
-static int icnss_subsys_restart_level_type(struct icnss_priv *priv,
-					   void *data)
-{
-	int ret = 0;
-	struct icnss_subsys_restart_level_data *event_data = data;
-
-	if (!priv)
-		return -ENODEV;
-
-	if (!data)
-		return -EINVAL;
-
-	ret = wlfw_subsys_restart_level_msg(priv, event_data->restart_level);
-
-	kfree(data);
-
 	return ret;
 }
 
@@ -1631,9 +1517,6 @@ static void icnss_driver_event_work(struct work_struct *work)
 			ret = icnss_qdss_trace_req_data_hdlr(priv,
 							     event->data);
 			break;
-		case ICNSS_DRIVER_EVENT_SUBSYS_RESTART_LEVEL:
-			ret = icnss_subsys_restart_level_type(priv, event->data);
-			break;
 		default:
 			icnss_pr_err("Invalid Event type: %d", event->type);
 			kfree(event);
@@ -1795,18 +1678,6 @@ static char *icnss_subsys_notify_state_to_str(enum subsys_notif_type code)
 		return "SOC_RESET";
 	case SUBSYS_NOTIF_TYPE_COUNT:
 		return "NOTIF_TYPE_COUNT";
-	case SUBSYS_BEFORE_DS_ENTRY:
-		return "BEFORE_DS_ENTRY";
-	case SUBSYS_AFTER_DS_ENTRY:
-		return "AFTER_DS_ENTRY";
-	case SUBSYS_DS_ENTRY_FAIL:
-		return "DS_ENTRY_FAIL";
-	case SUBSYS_BEFORE_DS_EXIT:
-		return "BEFORE_DS_EXIT";
-	case SUBSYS_AFTER_DS_EXIT:
-		return "AFTER_DS_EXIT";
-	case SUBSYS_DS_EXIT_FAIL:
-		return "DS_EXIT_FAIL";
 	default:
 		return "UNKNOWN";
 	}
@@ -1883,41 +1754,14 @@ static int icnss_modem_notifier_nb(struct notifier_block *nb,
 	icnss_pr_vdbg("Modem-Notify: event %s(%lu)\n",
 		      icnss_subsys_notify_state_to_str(code), code);
 
-	switch (code) {
-	case SUBSYS_BEFORE_SHUTDOWN:
-		if (!notif->crashed &&
-		    priv->low_power_support) { /* Hibernate */
-			if (test_bit(ICNSS_MODE_ON, &priv->state))
-				icnss_driver_event_post(
-					priv, ICNSS_DRIVER_EVENT_IDLE_SHUTDOWN,
-					ICNSS_EVENT_SYNC_UNINTERRUPTIBLE, NULL);
-			set_bit(ICNSS_LOW_POWER, &priv->state);
-		}
-		break;
-	case SUBSYS_AFTER_SHUTDOWN:
-		/* Collect ramdump only when there was a crash. */
-		if (notif->crashed) {
-			icnss_pr_info("Collecting msa0 segment dump\n");
-			icnss_msa0_ramdump(priv);
-		}
-
-		goto out;
-	case SUBSYS_BEFORE_DS_ENTRY:
-		if (test_bit(ICNSS_MODE_ON, &priv->state))
-			icnss_driver_event_post(
-					priv, ICNSS_DRIVER_EVENT_IDLE_SHUTDOWN,
-					ICNSS_EVENT_SYNC_UNINTERRUPTIBLE, NULL);
-		set_bit(ICNSS_LOW_POWER, &priv->state);
-		break;
-	case SUBSYS_AFTER_DS_ENTRY:
-	case SUBSYS_DS_ENTRY_FAIL:
-	case SUBSYS_BEFORE_DS_EXIT:
-		goto out;
-	case SUBSYS_AFTER_DS_EXIT:
-		clear_bit(ICNSS_LOW_POWER, &priv->state);
-	default:
+	if (code == SUBSYS_AFTER_SHUTDOWN) {
+		icnss_pr_info("Collecting msa0 segment dump\n");
+		icnss_msa0_ramdump(priv);
 		goto out;
 	}
+
+	if (code != SUBSYS_BEFORE_SHUTDOWN)
+		goto out;
 
 	priv->is_ssr = true;
 
@@ -1966,10 +1810,6 @@ static int icnss_modem_notifier_nb(struct notifier_block *nb,
 	}
 	icnss_driver_event_post(priv, ICNSS_DRIVER_EVENT_PD_SERVICE_DOWN,
 				ICNSS_EVENT_SYNC, event_data);
-
-	if (notif->crashed)
-		mod_timer(&priv->recovery_timer,
-			  jiffies + msecs_to_jiffies(ICNSS_RECOVERY_TIMEOUT));
 out:
 	icnss_pr_vdbg("Exit %s,state: 0x%lx\n", __func__, priv->state);
 	return NOTIFY_OK;
@@ -1997,43 +1837,6 @@ static int icnss_wpss_ssr_register_notifier(struct icnss_priv *priv)
 	set_bit(ICNSS_SSR_REGISTERED, &priv->state);
 
 	return ret;
-}
-
-static int icnss_slate_notifier_nb(struct notifier_block *nb,
-				   unsigned long code,
-				   void *data)
-{
-	struct icnss_priv *priv = container_of(nb, struct icnss_priv,
-					       slate_ssr_nb);
-	int ret = 0;
-
-	icnss_pr_vdbg("Slate-subsys-notify: event %lu\n", code);
-
-	if (code == SUBSYS_AFTER_POWERUP) {
-		set_bit(ICNSS_SLATE_UP, &priv->state);
-		complete(&priv->slate_boot_complete);
-		icnss_pr_dbg("Slate boot complete, state: 0x%lx\n",
-			     priv->state);
-	} else if (code == SUBSYS_BEFORE_SHUTDOWN &&
-		   test_bit(ICNSS_SLATE_UP, &priv->state)) {
-		clear_bit(ICNSS_SLATE_UP, &priv->state);
-		if (test_bit(ICNSS_PD_RESTART, &priv->state)) {
-			icnss_pr_err("PD_RESTART in progress 0x%lx\n",
-				     priv->state);
-			goto skip_pdr;
-		}
-
-		icnss_pr_dbg("Initiating PDR 0x%lx\n", priv->state);
-		ret = icnss_trigger_recovery(&priv->pdev->dev);
-		if (ret < 0) {
-			icnss_fatal_err("Fail to trigger PDR: ret: %d, state: 0x%lx\n",
-					ret, priv->state);
-			goto skip_pdr;
-		}
-	}
-
-skip_pdr:
-	return NOTIFY_OK;
 }
 
 static int icnss_modem_ssr_register_notifier(struct icnss_priv *priv)
@@ -2080,37 +1883,6 @@ static int icnss_modem_ssr_unregister_notifier(struct icnss_priv *priv)
 	subsys_notif_unregister_notifier(priv->modem_notify_handler,
 					 &priv->modem_ssr_nb);
 	priv->modem_notify_handler = NULL;
-
-	return 0;
-}
-
-static int icnss_slate_ssr_register_notifier(struct icnss_priv *priv)
-{
-	int ret = 0;
-
-	priv->slate_ssr_nb.notifier_call = icnss_slate_notifier_nb;
-
-	priv->slate_notify_handler =
-		subsys_notif_register_notifier("slatefw", &priv->slate_ssr_nb);
-
-	if (IS_ERR(priv->slate_notify_handler)) {
-		ret = PTR_ERR(priv->slate_notify_handler);
-		icnss_pr_err("SLATE register notifier failed: %d\n", ret);
-	}
-
-	set_bit(ICNSS_SLATE_SSR_REGISTERED, &priv->state);
-
-	return ret;
-}
-
-static int icnss_slate_ssr_unregister_notifier(struct icnss_priv *priv)
-{
-	if (!test_and_clear_bit(ICNSS_SLATE_SSR_REGISTERED, &priv->state))
-		return 0;
-
-	subsys_notif_unregister_notifier(priv->slate_notify_handler,
-					 &priv->slate_ssr_nb);
-	priv->slate_notify_handler = NULL;
 
 	return 0;
 }
@@ -2204,11 +1976,6 @@ event_post:
 	}
 
 	clear_bit(ICNSS_HOST_TRIGGERED_PDR, &priv->state);
-
-	if (event_data->crashed)
-		mod_timer(&priv->recovery_timer,
-			  jiffies + msecs_to_jiffies(ICNSS_RECOVERY_TIMEOUT));
-
 	icnss_driver_event_post(priv, ICNSS_DRIVER_EVENT_PD_SERVICE_DOWN,
 				ICNSS_EVENT_SYNC, event_data);
 done:
@@ -2414,10 +2181,6 @@ static int icnss_enable_recovery(struct icnss_priv *priv)
 	}
 
 	icnss_modem_ssr_register_notifier(priv);
-
-	if (priv->is_slate_rfa)
-		icnss_slate_ssr_register_notifier(priv);
-
 	if (test_bit(SSR_ONLY, &priv->ctrl_params.quirks)) {
 		icnss_pr_dbg("PDR disabled through module parameter\n");
 		return 0;
@@ -3692,39 +3455,6 @@ static void icnss_remove_sysfs_link(struct icnss_priv *priv)
 	sysfs_remove_link(kernel_kobj, "icnss");
 }
 
-static ssize_t
-icnss_bt_profile_sysfs_show(struct kobject *kobj,
-			    struct kobj_attribute *attr,
-			    char *buf)
-{
-	return 0;
-}
-
-static struct kobj_attribute icnss_bt_profile_sysfs_attr =
-__ATTR(bt_profile, 0660, icnss_bt_profile_sysfs_show, NULL);
-
-static int icnss_create_bt_profile_sysfs(struct icnss_priv *priv)
-{
-	int ret = 0;
-
-	ret = sysfs_create_file(&priv->pdev->dev.kobj,
-				&icnss_bt_profile_sysfs_attr.attr);
-	if (ret) {
-		icnss_pr_err("Unable to create bt_profile sysfs file err:%d",
-			     ret);
-		return ret;
-	}
-	return ret;
-}
-
-static void icnss_destroy_bt_profile_sysfs(struct icnss_priv *priv)
-{
-	if (priv && priv->pdev) {
-		sysfs_remove_file(&priv->pdev->dev.kobj,
-				  &icnss_bt_profile_sysfs_attr.attr);
-	}
-}
-
 static int icnss_sysfs_create(struct icnss_priv *priv)
 {
 	int ret = 0;
@@ -3743,9 +3473,6 @@ static int icnss_sysfs_create(struct icnss_priv *priv)
 	if (ret)
 		goto remove_icnss_group;
 
-	if (priv->is_rf_subtype_valid && priv->rf_subtype == 1)
-		icnss_create_bt_profile_sysfs(priv);
-
 	return 0;
 remove_icnss_group:
 	devm_device_remove_group(&priv->pdev->dev, &icnss_attr_group);
@@ -3755,9 +3482,6 @@ out:
 
 static void icnss_sysfs_destroy(struct icnss_priv *priv)
 {
-	if (priv->is_rf_subtype_valid && priv->rf_subtype == 1)
-		icnss_destroy_bt_profile_sysfs(priv);
-
 	icnss_destroy_shutdown_sysfs(priv);
 	icnss_remove_sysfs_link(priv);
 	devm_device_remove_group(&priv->pdev->dev, &icnss_attr_group);
@@ -3828,13 +3552,6 @@ static int icnss_resource_parse(struct icnss_priv *priv)
 		goto put_vreg;
 	}
 
-	if (of_property_read_bool(pdev->dev.of_node, "qcom,psf-supported")) {
-		ret = icnss_get_psf_info(priv);
-		if (ret < 0)
-			goto out;
-		priv->psf_supported = true;
-	}
-
 	if (priv->device_id == ADRASTEA_DEVICE_ID) {
 		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 						   "membase");
@@ -3868,25 +3585,6 @@ static int icnss_resource_parse(struct icnss_priv *priv)
 				priv->ce_irqs[i] = res->start;
 			}
 		}
-
-		if (of_property_read_bool(pdev->dev.of_node,
-					  "qcom,is_slate_rfa")) {
-			priv->is_slate_rfa = true;
-			icnss_pr_err("SLATE rfa is enabled\n");
-		}
-
-		if (of_property_read_bool(pdev->dev.of_node,
-					  "qcom,is_low_power")) {
-			priv->low_power_support = true;
-			icnss_pr_dbg("Deep Sleep/Hibernate mode supported\n");
-		}
-
-		if (of_property_read_u32(pdev->dev.of_node, "qcom,rf_subtype",
-					 &priv->rf_subtype) == 0) {
-			priv->is_rf_subtype_valid = true;
-			icnss_pr_dbg("RF subtype 0x%x\n", priv->rf_subtype);
-		}
-
 	} else if (priv->device_id == WCN6750_DEVICE_ID) {
 		res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 						   "msi_addr");
@@ -4174,14 +3872,6 @@ static void icnss_init_control_params(struct icnss_priv *priv)
 	}
 }
 
-static void icnss_read_device_configs(struct icnss_priv *priv)
-{
-	if (of_property_read_bool(priv->pdev->dev.of_node,
-				  "wlan-ipa-disabled")) {
-		set_bit(ICNSS_IPA_DISABLED, &priv->device_config);
-	}
-}
-
 static inline void  icnss_get_smp2p_info(struct icnss_priv *priv)
 {
 
@@ -4216,33 +3906,6 @@ static inline bool icnss_use_nv_mac(struct icnss_priv *priv)
 	return of_property_read_bool(priv->pdev->dev.of_node,
 				     "use-nv-mac");
 }
-
-#ifdef CONFIG_ICNSS2_RESTART_LEVEL_NOTIF
-static void pil_restart_level_notifier(void *ignore,
-				       int restart_level,
-				       const char *fw)
-{
-	struct icnss_subsys_restart_level_data *restart_level_data;
-
-	icnss_pr_err("PIL Notifier, restart_level: %d, FW:%s",
-		     restart_level, fw);
-
-	restart_level_data = kzalloc(sizeof(*restart_level_data), GFP_ATOMIC);
-
-	if (!restart_level_data)
-		return;
-
-	if (!strcmp(fw, "wpss")) {
-		if (restart_level == RESET_SUBSYS_COUPLED)
-			restart_level_data->restart_level = ICNSS_ENABLE_M3_SSR;
-		else
-			restart_level_data->restart_level = ICNSS_DISABLE_M3_SSR;
-
-		icnss_driver_event_post(penv, ICNSS_DRIVER_EVENT_SUBSYS_RESTART_LEVEL,
-					0, restart_level_data);
-	}
-}
-#endif
 
 static int icnss_probe(struct platform_device *pdev)
 {
@@ -4283,8 +3946,6 @@ static int icnss_probe(struct platform_device *pdev)
 	icnss_allow_recursive_recovery(dev);
 
 	icnss_init_control_params(priv);
-
-	icnss_read_device_configs(priv);
 
 	ret = icnss_resource_parse(priv);
 	if (ret)
@@ -4346,9 +4007,6 @@ static int icnss_probe(struct platform_device *pdev)
 
 	init_completion(&priv->unblock_shutdown);
 
-	if (priv->is_slate_rfa)
-		init_completion(&priv->slate_boot_complete);
-
 	if (priv->device_id == WCN6750_DEVICE_ID) {
 		ret = icnss_dms_init(priv);
 		if (ret)
@@ -4365,12 +4023,6 @@ static int icnss_probe(struct platform_device *pdev)
 		icnss_pr_dbg("NV MAC feature is %s\n",
 			     priv->use_nv_mac ? "Mandatory":"Not Mandatory");
 		INIT_WORK(&wpss_loader, icnss_wpss_load);
-#ifdef CONFIG_ICNSS2_RESTART_LEVEL_NOTIF
-		register_trace_pil_restart_level(pil_restart_level_notifier, NULL);
-#endif
-	} else {
-		timer_setup(&priv->recovery_timer,
-			    icnss_recovery_timeout_hdlr, 0);
 	}
 
 	INIT_LIST_HEAD(&priv->icnss_tcdev_list);
@@ -4392,18 +4044,6 @@ out_reset_drvdata:
 	return ret;
 }
 
-static void icnss_unregister_power_supply_notifier(struct icnss_priv *priv)
-{
-	if (priv->batt_psy)
-		power_supply_put(penv->batt_psy);
-
-	if (priv->psf_supported) {
-		flush_workqueue(priv->soc_update_wq);
-		destroy_workqueue(priv->soc_update_wq);
-		power_supply_unreg_notifier(&priv->psf_nb);
-	}
-}
-
 static int icnss_remove(struct platform_device *pdev)
 {
 	struct icnss_priv *priv = dev_get_drvdata(&pdev->dev);
@@ -4414,23 +4054,15 @@ static int icnss_remove(struct platform_device *pdev)
 		icnss_dms_deinit(priv);
 		icnss_genl_exit();
 		icnss_runtime_pm_deinit(priv);
-#ifdef CONFIG_ICNSS2_RESTART_LEVEL_NOTIF
-		unregister_trace_pil_restart_level(pil_restart_level_notifier, NULL);
-#endif
 	}
 
 	device_init_wakeup(&priv->pdev->dev, false);
 
 	icnss_debugfs_destroy(priv);
 
-	icnss_unregister_power_supply_notifier(penv);
-
 	icnss_sysfs_destroy(priv);
 
 	complete_all(&priv->unblock_shutdown);
-
-	if (priv->is_slate_rfa)
-		icnss_slate_ssr_unregister_notifier(priv);
 
 	destroy_ramdump_device(priv->msa0_dump_dev);
 
@@ -4464,18 +4096,6 @@ static int icnss_remove(struct platform_device *pdev)
 	return 0;
 }
 
-void icnss_recovery_timeout_hdlr(struct timer_list *t)
-{
-	struct icnss_priv *priv = from_timer(priv, t, recovery_timer);
-
-	if (test_bit(ICNSS_LOW_POWER, &priv->state)) {
-		icnss_pr_info("Device is in low power mode");
-		return;
-	}
-
-	icnss_pr_err("Timeout waiting for FW Ready 0x%lx\n", priv->state);
-	ICNSS_ASSERT(0);
-}
 #ifdef CONFIG_PM_SLEEP
 static int icnss_pm_suspend(struct device *dev)
 {

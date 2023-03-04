@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015, Sony Mobile Communications AB.
- * Copyright (c) 2012-2013, 2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2012-2013, 2019-2020 The Linux Foundation. All rights reserved.
  */
 
 #include <linux/hwspinlock.h>
@@ -85,7 +84,7 @@
 #define SMEM_GLOBAL_HOST	0xfffe
 
 /* Max number of processors/hosts in a system */
-#define SMEM_HOST_COUNT		20
+#define SMEM_HOST_COUNT		14
 
 /**
   * struct smem_proc_comm - proc_comm communication struct (legacy)
@@ -466,7 +465,7 @@ int qcom_smem_alloc(unsigned host, unsigned item, size_t size)
 		return -EINVAL;
 	}
 
-	if (item >= __smem->item_count)
+	if (WARN_ON(item >= __smem->item_count))
 		return -EINVAL;
 
 	ret = hwspin_lock_timeout_irqsave(__smem->hwlock,
@@ -646,7 +645,7 @@ void *qcom_smem_get(unsigned host, unsigned item, size_t *size)
 	if (!__smem)
 		return ptr;
 
-	if (item >= __smem->item_count)
+	if (WARN_ON(item >= __smem->item_count))
 		return ERR_PTR(-EINVAL);
 
 	ret = hwspin_lock_timeout_irqsave(__smem->hwlock,
@@ -733,10 +732,10 @@ phys_addr_t qcom_smem_virt_to_phys(void *p)
 	for (i = 0; i < __smem->num_regions; i++) {
 		struct smem_region *region = &__smem->regions[i];
 
-		if ((void __iomem *)p < region->virt_base)
+		if (p < region->virt_base)
 			continue;
-		if ((void __iomem *)p < region->virt_base + region->size) {
-			u64 offset = (void __iomem *)p - region->virt_base;
+		if (p < region->virt_base + region->size) {
+			u64 offset = p - (void *)region->virt_base;
 
 			return (phys_addr_t)region->aux_base + offset;
 		}

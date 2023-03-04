@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #include "hab.h"
 
@@ -232,18 +231,19 @@ static int hab_vchans_empty(int vmid)
 	for (i = 0; i < hab_driver.ndevices; i++) {
 		hab_dev = &hab_driver.devp[i];
 
-		read_lock_bh(&hab_dev->pchan_lock);
+		spin_lock_bh(&hab_dev->pchan_lock);
 		list_for_each_entry(pchan, &hab_dev->pchannels, node) {
 			if (pchan->vmid_remote == vmid) {
 				if (!hab_vchans_per_pchan_empty(pchan)) {
 					empty = 0;
+					spin_unlock_bh(&hab_dev->pchan_lock);
 					pr_info("vmid %d %s's vchans are not closed\n",
 							vmid, pchan->name);
 					break;
 				}
 			}
 		}
-		read_unlock_bh(&hab_dev->pchan_lock);
+		spin_unlock_bh(&hab_dev->pchan_lock);
 	}
 
 	return empty;

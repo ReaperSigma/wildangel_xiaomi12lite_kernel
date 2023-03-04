@@ -873,9 +873,6 @@ static int process_cdsp_request_thread(void *data)
 		if (result)
 			continue;
 
-		if (!req)
-			break;
-
 		msg = &req->msg;
 
 		if (msg && (msg->feature_id == SYSMON_CDSP_FEATURE_RM_RX) &&
@@ -1229,7 +1226,7 @@ static int cdsp_rm_driver_probe(struct platform_device *pdev)
 	u32 p;
 
 	struct device *dev = &pdev->dev;
-	struct thermal_cooling_device *tcdev = NULL;
+	struct thermal_cooling_device *tcdev = 0;
 	unsigned int cooling_cells = 0;
 
 	gcdsprm.b_silver_en = of_property_read_bool(dev->of_node,
@@ -1446,7 +1443,7 @@ static int cdsp_rm_driver_probe(struct platform_device *pdev)
 static int hvx_rm_driver_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct thermal_cooling_device *tcdev = NULL;
+	struct thermal_cooling_device *tcdev = 0;
 	unsigned int cooling_cells = 0;
 
 	of_property_read_u32(dev->of_node,

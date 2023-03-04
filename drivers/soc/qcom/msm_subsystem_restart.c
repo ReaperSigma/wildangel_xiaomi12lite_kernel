@@ -88,8 +88,6 @@ enum p_subsys_state {
 	SUBSYS_NORMAL,
 	SUBSYS_CRASHED,
 	SUBSYS_RESTARTING,
-	SUBSYS_IN_DEEPSLEEP,
-	SUBSYS_IN_HIBERNATE,
 };
 
 /**
@@ -171,7 +169,6 @@ struct restart_log {
  * @count: reference count of subsystem_get()/subsystem_put()
  * @id: ida
  * @restart_level: restart level (0 - panic, 1 - related, 2 - independent, etc.)
- * @keep_alive: whether keep alive during AP's panic
  * @restart_order: order of other devices this devices restarts with
  * @crash_count: number of times the device has crashed
  * @do_ramdump_on_put: ramdump on subsystem_put() if true
@@ -193,7 +190,6 @@ struct subsys_device {
 	int count;
 	int id;
 	int restart_level;
-	bool keep_alive;
 	int crash_count;
 	struct subsys_soc_restart_order *restart_order;
 	bool do_ramdump_on_put;
@@ -332,32 +328,6 @@ static ssize_t system_debug_store(struct device *dev,
 }
 static DEVICE_ATTR_RW(system_debug);
 
-static ssize_t keep_alive_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct subsys_device *subsys = to_subsys(dev);
-
-	return scnprintf(buf, PAGE_SIZE, "%d\n", subsys->keep_alive);
-}
-
-static ssize_t keep_alive_store(struct device *dev,
-				struct device_attribute *attr, const char *buf,
-				size_t count)
-{
-	struct subsys_device *subsys = to_subsys(dev);
-	unsigned long value;
-
-	if (kstrtoul(buf, 0, &value) != 0)
-		return -EINVAL;
-	if (value > 1)
-		return -EINVAL;
-
-	subsys->keep_alive = (bool)value;
-
-	return count;
-}
-static DEVICE_ATTR_RW(keep_alive);
-
 int subsys_get_restart_level(struct subsys_device *dev)
 {
 	return dev->restart_level;
@@ -386,7 +356,6 @@ static struct attribute *subsys_attrs[] = {
 	&dev_attr_restart_level.attr,
 	&dev_attr_firmware_name.attr,
 	&dev_attr_system_debug.attr,
-	&dev_attr_keep_alive.attr,
 	NULL,
 };
 
@@ -518,7 +487,6 @@ static void notif_timeout_handler(struct timer_list *t)
 	char *sysmon_msg = "Sysmon communication from %s to %s taking too long";
 	char *subsys_notif_msg = "Subsys notifier chain for %s taking too long";
 	char *sysmon_shutdwn_msg = "sysmon_send_shutdown to %s taking too long";
-	char *sysmon_dsentry_msg = "sysmon_enter_ds to %s taking too long";
 	char *unknown_err_msg = "Unknown communication occurred";
 	struct subsys_notif_timeout *timeout_data =
 		from_timer(timeout_data, t, timer);
@@ -536,10 +504,6 @@ static void notif_timeout_handler(struct timer_list *t)
 	case HLOS_TO_SUBSYS_SYSMON_SHUTDOWN:
 		SSR_NOTIF_TIMEOUT_WARN(sysmon_shutdwn_msg,
 				       timeout_data->dest_name);
-
-	case HLOS_TO_SUBSYS_SYSMON_DSENTER:
-		SSR_NOTIF_TIMEOUT_WARN(sysmon_dsentry_msg,
-					timeout_data->dest_name);
 		break;
 	default:
 		SSR_NOTIF_TIMEOUT_WARN(unknown_err_msg);
@@ -770,36 +734,9 @@ struct subsys_device *find_subsys_device(const char *str)
 }
 EXPORT_SYMBOL(find_subsys_device);
 
-static int subsys_start_notify(struct subsys_device *subsys)
-{
-	struct subsys_tracking *track;
-	int ret;
-
-	track = subsys_get_track(subsys);
-	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_POWERUP,
-								NULL);
-
-	ret = subsys->desc->powerup_notify(subsys->desc);
-	if (ret) {
-		notify_each_subsys_device(&subsys, 1, SUBSYS_POWERUP_FAILURE,
-									NULL);
-		return ret;
-	}
-	subsys_set_state(subsys, SUBSYS_ONLINE);
-	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_POWERUP,
-								NULL);
-	return ret;
-}
-
 static int subsys_start(struct subsys_device *subsys)
 {
-	struct subsys_tracking *track;
 	int ret;
-
-	track = subsys_get_track(subsys);
-	if ((track->p_state == SUBSYS_IN_DEEPSLEEP) ||
-		(track->p_state == SUBSYS_IN_HIBERNATE))
-		return true;
 
 	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_POWERUP,
 								NULL);
@@ -814,115 +751,11 @@ static int subsys_start(struct subsys_device *subsys)
 	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_POWERUP,
 								NULL);
 	return ret;
-}
-
-static int subsys_s2d_exit(struct subsys_device *subsys)
-{
-	struct subsys_tracking *track;
-	int ret;
-
-	track = subsys_get_track(subsys);
-	if (!(track->p_state == SUBSYS_IN_HIBERNATE))
-		return true;
-
-	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_POWERUP,
-								NULL);
-	ret = subsys->desc->powerup(subsys->desc);
-	if (ret) {
-		notify_each_subsys_device(&subsys, 1, SUBSYS_POWERUP_FAILURE,
-									NULL);
-		return ret;
-	}
-	track->p_state = SUBSYS_NORMAL;
-	subsys_set_state(subsys, SUBSYS_ONLINE);
-	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_POWERUP,
-								NULL);
-	return ret;
-}
-
-static int subsys_ds_exit(struct subsys_device *subsys)
-{
-	struct subsys_tracking *track;
-	int ret;
-
-	track = subsys_get_track(subsys);
-	if (!(track->p_state == SUBSYS_IN_DEEPSLEEP))
-		return true;
-
-	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_DS_EXIT, NULL);
-	ret = subsys->desc->powerup(subsys->desc);
-	if (ret) {
-		notify_each_subsys_device(&subsys, 1, SUBSYS_DS_EXIT_FAIL, NULL);
-		return ret;
-	}
-	track->p_state = SUBSYS_NORMAL;
-	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_DS_EXIT, NULL);
-	return ret;
-}
-
-static int subsys_ds_entry(struct subsys_device *subsys)
-{
-	const char *name = subsys->desc->name;
-	struct subsys_tracking *track;
-
-	track = subsys_get_track(subsys);
-	if (track->p_state == SUBSYS_IN_DEEPSLEEP)
-		return true;
-
-	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_DS_ENTRY, NULL);
-
-	setup_timeout(NULL, subsys->desc, HLOS_TO_SUBSYS_SYSMON_DSENTER);
-	subsys->desc->sysmon_dsentry_ret = sysmon_send_enter_ds(subsys->desc);
-	cancel_timeout(subsys->desc);
-	if (subsys->desc->sysmon_dsentry_ret) {
-		pr_debug("deep sleep entry failed for %s\n", name);
-		notify_each_subsys_device(&subsys, 1, SUBSYS_DS_ENTRY_FAIL, NULL);
-	} else {
-		subsys->desc->shutdown(subsys->desc, false);
-		notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_DS_ENTRY, NULL);
-	}
-	track->p_state = SUBSYS_IN_DEEPSLEEP;
-	return subsys->desc->sysmon_dsentry_ret;
-}
-
-static int subsys_s2d_entry(struct subsys_device *subsys)
-{
-	const char *name = subsys->desc->name;
-	struct subsys_tracking *track;
-
-	track = subsys_get_track(subsys);
-	if (track->p_state == SUBSYS_IN_HIBERNATE)
-		return true;
-
-	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_SHUTDOWN, NULL);
-	if (!of_property_read_bool(subsys->desc->dev->of_node,
-					"qcom,pil-force-shutdown")) {
-		subsys_set_state(subsys, SUBSYS_OFFLINING);
-		setup_timeout(NULL, subsys->desc,
-			      HLOS_TO_SUBSYS_SYSMON_SHUTDOWN);
-		subsys->desc->sysmon_shutdown_ret =
-				sysmon_send_shutdown(subsys->desc);
-		cancel_timeout(subsys->desc);
-		if (subsys->desc->sysmon_shutdown_ret)
-			pr_debug("Graceful shutdown failed for %s\n", name);
-	}
-
-	subsys->desc->shutdown(subsys->desc, false);
-	track->p_state = SUBSYS_IN_HIBERNATE;
-	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_SHUTDOWN, NULL);
-	return 0;
-
 }
 
 static void subsys_stop(struct subsys_device *subsys)
 {
 	const char *name = subsys->desc->name;
-	struct subsys_tracking *track;
-
-	track = subsys_get_track(subsys);
-	if ((track->p_state == SUBSYS_IN_DEEPSLEEP) ||
-		 (track->p_state == SUBSYS_IN_HIBERNATE))
-		return;
 
 	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_SHUTDOWN, NULL);
 	if (!of_property_read_bool(subsys->desc->dev->of_node,
@@ -1017,92 +850,6 @@ err_module:
 }
 
 /**
- * subsytem_ds_exit() - Take subsystem out of deep sleep.
- * @name: pointer to a string containing the name of the subsystem to take
- * out of deep sleep.
- *
- * This function returns a pointer if it succeeds. If an error occurs an
- * ERR_PTR is returned.
- *
- * If this feature is disable, the value %NULL will be returned.
- */
-
-int subsystem_ds_exit(const char *name)
-{
-	struct subsys_device *subsys;
-	int ret;
-	struct subsys_tracking *track;
-
-	if (!name)
-		return -EINVAL;
-
-	subsys = find_subsys_device(name);
-	if (!subsys)
-		return -ENODEV;
-	if (!try_module_get(subsys->owner)) {
-		ret = -ENODEV;
-		goto err_module;
-	}
-	track = subsys_get_track(subsys);
-	mutex_lock(&track->lock);
-	ret = subsys_ds_exit(subsys);
-	if (ret) {
-		ret = -EAGAIN;
-		goto err_start;
-	}
-	mutex_unlock(&track->lock);
-	return ret;
-err_start:
-	mutex_unlock(&track->lock);
-	module_put(subsys->owner);
-err_module:
-	put_device(&subsys->dev);
-	return ret;
-}
-EXPORT_SYMBOL(subsystem_ds_exit);
-
-/**
- * subsystem_s2d_exit() - Take subsystem out of hibernate.
- * @name: pointer to a string containing the name of the subsystem to take
- * out of hibernate.
- *
- * This function returns NULL if it succeeds.
- *
- */
-
-int subsystem_s2d_exit(const char *name)
-{
-	struct subsys_device *subsys;
-	int ret;
-	struct subsys_tracking *track;
-
-	if (!name)
-		return -EINVAL;
-
-	subsys = find_subsys_device(name);
-	if (!subsys)
-		return -ENODEV;
-	if (!try_module_get(subsys->owner)) {
-		ret = -ENODEV;
-		goto err_module;
-	}
-	track = subsys_get_track(subsys);
-	mutex_lock(&track->lock);
-	ret = subsys_s2d_exit(subsys);
-	if (ret)
-		goto err_start;
-	mutex_unlock(&track->lock);
-	return ret;
-err_start:
-	mutex_unlock(&track->lock);
-	module_put(subsys->owner);
-err_module:
-	put_device(&subsys->dev);
-	return ret;
-}
-EXPORT_SYMBOL(subsystem_s2d_exit);
-
-/**
  * subsytem_get() - Boot a subsystem
  * @name: pointer to a string containing the name of the subsystem to boot
  *
@@ -1172,132 +919,6 @@ err_out:
 	mutex_unlock(&track->lock);
 }
 EXPORT_SYMBOL(subsystem_put);
-
-/**
- * subsytem_start_notify() - Notify about powerup of the subsystem.
- * @name: pointer to a string containing the name of the subsystem
- *
- * This function returns a pointer if it succeeds. If an error occurs an
- * ERR_PTR is returned.
- *
- */
-int subsystem_start_notify(const char *name)
-{
-	struct subsys_device *subsys;
-	int ret;
-	struct subsys_tracking *track;
-
-	if (!name)
-		return -EINVAL;
-
-	subsys = find_subsys_device(name);
-	if (!subsys)
-		return -ENODEV;
-	if (!try_module_get(subsys->owner)) {
-		ret = -ENODEV;
-		goto err_module;
-	}
-	track = subsys_get_track(subsys);
-	mutex_lock(&track->lock);
-	ret = subsys_start_notify(subsys);
-	if (ret) {
-		ret = -EAGAIN;
-		goto err_start;
-	}
-	mutex_unlock(&track->lock);
-	return ret;
-err_start:
-	mutex_unlock(&track->lock);
-	module_put(subsys->owner);
-err_module:
-	put_device(&subsys->dev);
-	return ret;
-}
-EXPORT_SYMBOL(subsystem_start_notify);
-
-/**
- * subsytem_stop_notify() - Notify about shutdown of the subsystem.
- * @subsystem: pointer to a string containing the name of the subsystem
- *
- */
-int subsystem_stop_notify(const char *subsystem)
-{
-	struct subsys_device *subsys;
-	struct subsys_tracking *track;
-	bool ret = true;
-
-	subsys = find_subsys_device(subsystem);
-	if (IS_ERR_OR_NULL(subsys))
-		return -EINVAL;
-
-	track = subsys_get_track(subsys);
-	mutex_lock(&track->lock);
-	if (subsys->count) {
-		subsys_stop(subsys);
-		subsystem_free_memory(subsys, NULL);
-	}
-	mutex_unlock(&track->lock);
-	module_put(subsys->owner);
-	put_device(&subsys->dev);
-	return ret;
-}
-EXPORT_SYMBOL(subsystem_stop_notify);
-
-/**
- * subsystem_ds_entry() - Take subsystem into deep sleep
- * @peripheral: subsystem to enter into deep sleep
- *
- */
-int subsystem_ds_entry(const char *subsystem)
-{
-	struct subsys_device *subsys;
-	struct subsys_tracking *track;
-	bool ret = true;
-
-	subsys = find_subsys_device(subsystem);
-	if (IS_ERR_OR_NULL(subsys))
-		return -EINVAL;
-
-	track = subsys_get_track(subsys);
-	mutex_lock(&track->lock);
-	if (subsys->count) {
-		ret = subsys_ds_entry(subsys);
-		subsystem_free_memory(subsys, NULL);
-	}
-	mutex_unlock(&track->lock);
-	module_put(subsys->owner);
-	put_device(&subsys->dev);
-	return ret;
-}
-EXPORT_SYMBOL(subsystem_ds_entry);
-
-/**
- * subsystem_s2d_entry() - Take subsystem into hibernate
- * @peripheral: subsystem to enter into deep sleep
- *
- */
-int subsystem_s2d_entry(const char *subsystem)
-{
-	struct subsys_device *subsys;
-	struct subsys_tracking *track;
-	bool ret = true;
-
-	subsys = find_subsys_device(subsystem);
-	if (IS_ERR_OR_NULL(subsys))
-		return -EINVAL;
-
-	track = subsys_get_track(subsys);
-	mutex_lock(&track->lock);
-	if (subsys->count) {
-		ret = subsys_s2d_entry(subsys);
-		subsystem_free_memory(subsys, NULL);
-	}
-	mutex_unlock(&track->lock);
-	module_put(subsys->owner);
-	put_device(&subsys->dev);
-	return ret;
-}
-EXPORT_SYMBOL(subsystem_s2d_entry);
 
 static void subsystem_restart_wq_func(struct work_struct *work)
 {
@@ -1968,12 +1589,6 @@ EXPORT_SYMBOL(subsys_unregister);
 static int subsys_panic(struct device *dev, void *data)
 {
 	struct subsys_device *subsys = to_subsys(dev);
-
-	/* Keeping the subsys alive during panic */
-	if (!panic_timeout && subsys->keep_alive) {
-		dev_warn(dev, "keeping %s alive\n", subsys->desc->name);
-		return 0;
-	}
 
 	if (subsys->desc->crash_shutdown)
 		subsys->desc->crash_shutdown(subsys->desc);

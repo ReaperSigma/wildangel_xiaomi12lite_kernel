@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #define pr_fmt(msg) "slatecom_dev:" msg
 
@@ -32,7 +31,7 @@
 
 #include "peripheral-loader.h"
 #include "../../misc/qseecom_kernel.h"
-#include "slatecom_rpmsg.h"
+//#include "pil_slate_intf.h"
 
 #define SLATECOM "slate_com_dev"
 
@@ -55,7 +54,6 @@
 
 static char btss_state[BUF_SIZE] = "offline";
 static char dspss_state[BUF_SIZE] = "offline";
-static void ssr_register(void);
 
 /* tzapp command list.*/
 enum slate_tz_commands {
@@ -90,34 +88,14 @@ enum {
 	SSR_DOMAIN_MAX,
 };
 
-enum slatecom_state {
-	SLATECOM_STATE_UNKNOWN,
-	SLATECOM_STATE_INIT,
-	SLATECOM_STATE_GLINK_OPEN,
-	SLATECOM_STATE_SLATE_SSR
-};
-
 struct slatedaemon_priv {
 	void *pil_h;
+	struct qseecom_handle *qseecom_handle;
 	int app_status;
 	unsigned long attrs;
 	u32 cmd_status;
 	struct device *platform_dev;
-	bool slatecom_rpmsg;
-	bool slate_resp_cmplt;
-	void *lhndl;
-	wait_queue_head_t link_state_wait;
-	char rx_buf[20];
-	struct work_struct slatecom_up_work;
-	struct work_struct slatecom_down_work;
-	struct mutex glink_mutex;
-	struct mutex slatecom_state_mutex;
-	enum slatecom_state slatecom_current_state;
-	struct workqueue_struct *slatecom_wq;
-	struct wakeup_source slatecom_ws;
 };
-
-static void *slatecom_intf_drv;
 
 struct slate_event {
 	enum slate_event_type e_type;
@@ -131,7 +109,7 @@ struct service_info {
 };
 
 static char *ssr_domains[] = {
-	"slatefw",
+	"slate-wear",
 	"modem",
 	"adsp",
 };
@@ -152,7 +130,6 @@ static	bool                     slate_bt_error;
 static  struct   slatecom_open_config_type   config_type;
 static DECLARE_COMPLETION(slate_modem_down_wait);
 static DECLARE_COMPLETION(slate_adsp_down_wait);
-static struct srcu_notifier_head slatecom_notifier_chain;
 
 static ssize_t slate_bt_state_sysfs_read
 			(struct class *class, struct class_attribute *attr, char *buf)
@@ -205,115 +182,9 @@ static int send_uevent(struct slate_event *pce)
 	return kobject_uevent_env(&dev_ret->kobj, KOBJ_CHANGE, envp);
 }
 
-void slatecom_intf_notify_glink_channel_state(bool state)
-{
-	struct slatedaemon_priv *dev =
-		container_of(slatecom_intf_drv, struct slatedaemon_priv, lhndl);
-
-	pr_debug("%s: slate_ctrl channel state: %d\n", __func__, state);
-	dev->slatecom_rpmsg = state;
-}
-EXPORT_SYMBOL(slatecom_intf_notify_glink_channel_state);
-
-void slatecom_rx_msg(void *data, int len)
-{
-	struct slatedaemon_priv *dev =
-		container_of(slatecom_intf_drv, struct slatedaemon_priv, lhndl);
-
-	dev->slate_resp_cmplt = true;
-	wake_up(&dev->link_state_wait);
-	memcpy(dev->rx_buf, data, len);
-}
-EXPORT_SYMBOL(slatecom_rx_msg);
-
-static int slatecom_tx_msg(struct slatedaemon_priv *dev, void  *msg, size_t len)
-{
-	int rc = 0;
-	uint8_t resp = 0;
-
-	mutex_lock(&dev->glink_mutex);
-	__pm_stay_awake(&dev->slatecom_ws);
-	if (!dev->slatecom_rpmsg) {
-		pr_err("slatecom-rpmsg is not probed yet, waiting for it to be probed\n");
-		goto err_ret;
-	}
-	rc = slatecom_rpmsg_tx_msg(msg, len);
-
-	/* wait for sending command to SLATE */
-	rc = wait_event_timeout(dev->link_state_wait,
-			(rc == 0), msecs_to_jiffies(TIMEOUT_MS));
-	if (rc == 0) {
-		pr_err("failed to send command to SLATE %d\n", rc);
-		goto err_ret;
-	}
-
-	/* wait for getting response from SLATE */
-	rc = wait_event_timeout(dev->link_state_wait,
-			dev->slate_resp_cmplt,
-				 msecs_to_jiffies(TIMEOUT_MS));
-	if (rc == 0) {
-		pr_err("failed to get SLATE response %d\n", rc);
-		goto err_ret;
-	}
-	dev->slate_resp_cmplt = false;
-	/* check SLATE response */
-	resp = *(uint8_t *)dev->rx_buf;
-	if (resp == 0x01) {
-		pr_err("Bad SLATE response\n");
-		rc = -EINVAL;
-		goto err_ret;
-	}
-	rc = 0;
-
-err_ret:
-	__pm_relax(&dev->slatecom_ws);
-	mutex_unlock(&dev->glink_mutex);
-	return rc;
-}
-
-/**
- * send_state_change_cmd send state transition event to Slate
- * and wait for the response.
- * The response is returned to the caller.
- */
-static int send_state_change_cmd(struct slate_ui_data *ui_obj_msg)
-{
-	int ret = 0;
-	struct msg_header_t msg_header = {0, 0};
-	struct slatedaemon_priv *dev = container_of(slatecom_intf_drv,
-					struct slatedaemon_priv,
-					lhndl);
-	uint32_t state = ui_obj_msg->cmd;
-
-	switch (state) {
-	case STATE_TWM_ENTER:
-		msg_header.opcode = GMI_MGR_ENTER_TWM;
-		break;
-	case STATE_DS_ENTER:
-		msg_header.opcode = GMI_MGR_ENTER_TRACKER_DS;
-		break;
-	case STATE_DS_EXIT:
-		msg_header.opcode = GMI_MGR_EXIT_TRACKER_DS;
-		break;
-	case STATE_S2D_ENTER:
-		msg_header.opcode = GMI_MGR_ENTER_TRACKER_DS;
-		break;
-	case STATE_S2D_EXIT:
-		msg_header.opcode = GMI_MGR_EXIT_TRACKER_DS;
-		break;
-	default:
-		pr_err("Invalid MSM State transtion cmd\n");
-		break;
-	}
-	ret = slatecom_tx_msg(dev, &msg_header.opcode, sizeof(msg_header.opcode));
-	if (ret < 0)
-		pr_err("MSM State transtion event cmd failed\n");
-	return ret;
-}
-
 static int slatecom_char_open(struct inode *inode, struct file *file)
 {
-	int ret = 0;
+	int ret;
 
 	mutex_lock(&slate_char_mutex);
 	if (device_open == 1) {
@@ -337,7 +208,7 @@ static int slatechar_read_cmd(struct slate_ui_data *fui_obj_msg,
 		unsigned int type)
 {
 	void              *read_buf;
-	int               ret = 0;
+	int               ret;
 	void __user       *result   = (void *)
 			(uintptr_t)fui_obj_msg->result;
 
@@ -425,39 +296,6 @@ int slate_soft_reset(void)
 }
 EXPORT_SYMBOL(slate_soft_reset);
 
-int send_wlan_state(enum WMSlateCtrlChnlOpcode type)
-{
-	int ret = 0;
-	struct msg_header_t msg_header = {0, 0};
-	struct slatedaemon_priv *dev = container_of(slatecom_intf_drv,
-					struct slatedaemon_priv,
-					lhndl);
-
-	switch (type) {
-	case GMI_MGR_WLAN_BOOT_INIT:
-		msg_header.opcode = GMI_MGR_WLAN_BOOT_INIT;
-		break;
-	case GMI_MGR_WLAN_BOOT_COMPLETE:
-		msg_header.opcode = GMI_MGR_WLAN_BOOT_COMPLETE;
-		break;
-	case GMI_WLAN_5G_CONNECT:
-		msg_header.opcode = GMI_WLAN_5G_CONNECT;
-		break;
-	case GMI_WLAN_5G_DISCONNECT:
-		msg_header.opcode = GMI_WLAN_5G_DISCONNECT;
-		break;
-	default:
-		pr_err("Invalid WLAN State transtion cmd = %d\n", type);
-		break;
-	}
-
-	ret = slatecom_tx_msg(dev, &msg_header.opcode, sizeof(msg_header.opcode));
-	if (ret < 0)
-		pr_err("WLAN State transtion event cmd failed with = %d\n", ret);
-	return ret;
-}
-EXPORT_SYMBOL(send_wlan_state);
-
 static int modem_down2_slate(void)
 {
 	complete(&slate_modem_down_wait);
@@ -470,71 +308,11 @@ static int adsp_down2_slate(void)
 	return 0;
 }
 
-static int send_time_sync(struct slate_ui_data *tui_obj_msg)
-{
-	int ret = 0;
-	void *write_buf;
-
-	write_buf = kmalloc_array(tui_obj_msg->num_of_words, sizeof(uint32_t),
-							GFP_KERNEL);
-	if (write_buf == NULL)
-		return -ENOMEM;
-	write_buf = memdup_user(tui_obj_msg->buffer,
-					tui_obj_msg->num_of_words * sizeof(uint32_t));
-	if (IS_ERR(write_buf)) {
-		ret = PTR_ERR(write_buf);
-		kfree(write_buf);
-		return ret;
-	}
-	ret = slatecom_tx_msg(dev, write_buf, tui_obj_msg->num_of_words*4);
-	if (ret < 0)
-		pr_err("send_time_data cmd failed\n");
-	else
-		pr_info("send_time_data cmd success\n");
-return ret;
-}
-
-static int send_debug_config(struct slate_ui_data *tui_obj_msg)
-{
-	int ret = 0;
-	struct msg_header_t msg_header = {0, 0};
-	struct slatedaemon_priv *dev = container_of(slatecom_intf_drv,
-					struct slatedaemon_priv,
-					lhndl);
-	uint32_t config = tui_obj_msg->cmd;
-
-	switch (config) {
-	case ENABLE_PMIC_RTC:
-		msg_header.opcode = GMI_MGR_ENABLE_PMIC_RTC;
-		break;
-	case DISABLE_PMIC_RTC:
-		msg_header.opcode = GMI_MGR_DISABLE_PMIC_RTC;
-		break;
-	case ENABLE_QCLI:
-		msg_header.opcode = GMI_MGR_ENABLE_QCLI;
-		break;
-	case DISABLE_QCLI:
-		msg_header.opcode = GMI_MGR_DISABLE_QCLI;
-		break;
-	default:
-		pr_err("Invalid debug config cmd\n");
-		return -EINVAL;
-	}
-	ret = slatecom_tx_msg(dev, &msg_header.opcode, sizeof(msg_header.opcode));
-
-	if (ret < 0)
-		pr_err("failed to send debug config cmd\n");
-	return ret;
-}
-
 static long slate_com_ioctl(struct file *filp,
 		unsigned int ui_slatecom_cmd, unsigned long arg)
 {
-	int ret = 0;
+	int ret;
 	struct slate_ui_data ui_obj_msg;
-
-	if (filp == NULL)
-		return -EINVAL;
 
 	switch (ui_slatecom_cmd) {
 	case REG_READ:
@@ -583,70 +361,26 @@ static long slate_com_ioctl(struct file *filp,
 		slate_app_running = true;
 		ret = 0;
 		break;
-	case SLATE_LOAD:
+	case SLATE_WEAR_LOAD:
 		ret = 0;
 		if (dev->pil_h) {
-			pr_err("slate is already loaded\n");
+			pr_err("slate-wear is already loaded\n");
 			ret = -EFAULT;
 			break;
 		}
-		dev->pil_h = subsystem_get_with_fwname("slatefw", "slatefw");
+		dev->pil_h = subsystem_get_with_fwname("slate-wear", "slate-wear");
 		if (!dev->pil_h) {
-			pr_err("failed to load slate\n");
+			pr_err("failed to load slate-wear\n");
 			ret = -EFAULT;
 		}
 		break;
-	case SLATE_UNLOAD:
+	case SLATE_WEAR_UNLOAD:
 		if (dev->pil_h) {
 			subsystem_put(dev->pil_h);
 			dev->pil_h = NULL;
 			slate_soft_reset();
 		}
 		ret = 0;
-		break;
-	case DEVICE_STATE_TRANSITION:
-		if (dev->slatecom_current_state != SLATECOM_STATE_GLINK_OPEN) {
-			pr_err("driver not ready, glink is not open\n");
-			return -ENODEV;
-		}
-		if (copy_from_user(&ui_obj_msg, (void __user *)arg,
-					sizeof(ui_obj_msg))) {
-			pr_err("The copy from user failed-state transition\n");
-			ret = -EFAULT;
-		}
-		ret = send_state_change_cmd(&ui_obj_msg);
-		if (ret < 0)
-			pr_err("device_state_transition cmd failed\n");
-		break;
-	case SEND_TIME_DATA:
-		if (dev->slatecom_current_state != SLATECOM_STATE_GLINK_OPEN) {
-			pr_err("%s: driver not ready, current state: %d\n",
-			__func__, dev->slatecom_current_state);
-			return -ENODEV;
-		}
-		if (copy_from_user(&ui_obj_msg, (void __user *) arg,
-					sizeof(ui_obj_msg))) {
-			pr_err("The copy from user failed for time data\n");
-			ret = -EFAULT;
-		}
-		ret = send_time_sync(&ui_obj_msg);
-		if (ret < 0)
-			pr_err("send_time_data cmd failed\n");
-		break;
-	case SEND_DEBUG_CONFIG:
-		if (dev->slatecom_current_state != SLATECOM_STATE_GLINK_OPEN) {
-			pr_err("%s: driver not ready, current state: %d\n",
-			__func__, dev->slatecom_current_state);
-			return -ENODEV;
-		}
-		if (copy_from_user(&ui_obj_msg, (void __user *) arg,
-					sizeof(ui_obj_msg))) {
-			pr_err("The copy from user failed for time data\n");
-			ret = -EFAULT;
-		}
-		ret = send_debug_config(&ui_obj_msg);
-		if (ret < 0)
-			pr_err("send_time_data cmd failed\n");
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -655,69 +389,9 @@ static long slate_com_ioctl(struct file *filp,
 	return ret;
 }
 
-static ssize_t slatecom_char_write(struct file *f, const char __user *buf,
-				size_t count, loff_t *off)
-{
-	unsigned char qcli_cmnd;
-	uint32_t opcode;
-	int ret = 0;
-	struct slatedaemon_priv *dev = container_of(slatecom_intf_drv,
-					struct slatedaemon_priv,
-					lhndl);
-
-	if (copy_from_user(&qcli_cmnd, buf, sizeof(unsigned char)))
-		return -EFAULT;
-
-	pr_debug("%s: QCLI command arg = %c\n", __func__, qcli_cmnd);
-
-	switch (qcli_cmnd) {
-	case '0':
-		opcode = GMI_MGR_DISABLE_QCLI;
-		ret = slatecom_tx_msg(dev, &opcode, sizeof(opcode));
-		if (ret < 0)
-			pr_err("MSM QCLI Disable cmd failed\n");
-		break;
-	case '1':
-		opcode = GMI_MGR_ENABLE_QCLI;
-		ret = slatecom_tx_msg(dev, &opcode, sizeof(opcode));
-		if (ret < 0)
-			pr_err("MSM QCLI Enable cmd failed\n");
-		break;
-	case '2':
-		ret = subsystem_start_notify(ssr_domains[0]);
-		if (ret < 0)
-			pr_err("subsystem start notify cmd failed\n");
-		break;
-	case '3':
-		ret = subsystem_stop_notify(ssr_domains[0]);
-		if (ret < 0)
-			pr_err("subsystem stop notify cmd failed\n");
-		break;
-	case '4':
-		opcode = GMI_MGR_ENABLE_PMIC_RTC;
-		ret = slatecom_tx_msg(dev, &opcode, sizeof(opcode));
-		if (ret < 0)
-			pr_err("MSM RTC Enable cmd failed\n");
-		break;
-	case '5':
-		opcode = GMI_MGR_DISABLE_PMIC_RTC;
-		ret = slatecom_tx_msg(dev, &opcode, sizeof(opcode));
-		if (ret < 0)
-			pr_err("MSM RTC Disable cmd failed\n");
-		break;
-
-	default:
-		pr_err("MSM QCLI Invalid Option\n");
-		break;
-	}
-
-	*off += count;
-	return count;
-}
-
 static int slatecom_char_close(struct inode *inode, struct file *file)
 {
-	int ret = 0;
+	int ret;
 
 	mutex_lock(&slate_char_mutex);
 	ret = slatecom_close(&handle);
@@ -726,90 +400,19 @@ static int slatecom_char_close(struct inode *inode, struct file *file)
 	return ret;
 }
 
-static void slatecom_slateup_work(struct work_struct *work)
-{
-	int ret = 0;
-	struct slatedaemon_priv *dev =
-			container_of(work, struct slatedaemon_priv, slatecom_up_work);
-
-	mutex_lock(&dev->slatecom_state_mutex);
-	if (!dev->slatecom_rpmsg)
-		pr_err("slatecom-rpmsg is not probed yet\n");
-	ret = wait_event_timeout(dev->link_state_wait,
-				dev->slatecom_rpmsg, msecs_to_jiffies(TIMEOUT_MS));
-	if (ret == 0) {
-		pr_err("channel connection time out %d\n", ret);
-		goto glink_err;
-	}
-	dev->slatecom_current_state = SLATECOM_STATE_GLINK_OPEN;
-	goto unlock;
-
-glink_err:
-	dev->slatecom_current_state = SLATECOM_STATE_INIT;
-unlock:
-	mutex_unlock(&dev->slatecom_state_mutex);
-}
-
-
-static void slatecom_slatedown_work(struct work_struct *work)
-{
-	struct slatedaemon_priv *dev = container_of(work, struct slatedaemon_priv,
-								slatecom_down_work);
-
-	mutex_lock(&dev->slatecom_state_mutex);
-
-	pr_debug("Slatecom current state is : %d\n", dev->slatecom_current_state);
-
-	dev->slatecom_current_state = SLATECOM_STATE_SLATE_SSR;
-
-	mutex_unlock(&dev->slatecom_state_mutex);
-}
-
-static int slatecom_rpmsg_init(struct slatedaemon_priv *dev)
-{
-	slatecom_intf_drv = &dev->lhndl;
-	mutex_init(&dev->glink_mutex);
-	mutex_init(&dev->slatecom_state_mutex);
-
-	dev->slatecom_wq =
-		create_singlethread_workqueue("slatecom-work-queue");
-	if (!dev->slatecom_wq) {
-		pr_err("Failed to init Slatecom work-queue\n");
-		return -ENOMEM;
-	}
-
-	init_waitqueue_head(&dev->link_state_wait);
-
-	/* set default slatecom state */
-	dev->slatecom_current_state = SLATECOM_STATE_INIT;
-
-	/* Init all works */
-	INIT_WORK(&dev->slatecom_up_work, slatecom_slateup_work);
-	INIT_WORK(&dev->slatecom_down_work, slatecom_slatedown_work);
-
-	return 0;
-}
-
 static int slate_daemon_probe(struct platform_device *pdev)
 {
 	struct device_node *node;
-	int rc = 0;
 
 	node = pdev->dev.of_node;
 
 	dev = kzalloc(sizeof(struct slatedaemon_priv), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
-	/* Add wake lock for PM suspend */
-	wakeup_source_add(&dev->slatecom_ws);
-	dev->slatecom_current_state = SLATECOM_STATE_UNKNOWN;
-	rc = slatecom_rpmsg_init(dev);
-	if (rc)
-		return -ENODEV;
+
 	dev->platform_dev = &pdev->dev;
 	pr_info("%s success\n", __func__);
 
-	ssr_register();
 	return 0;
 }
 
@@ -830,7 +433,6 @@ static struct platform_driver slate_daemon_driver = {
 static const struct file_operations fops = {
 	.owner          = THIS_MODULE,
 	.open           = slatecom_char_open,
-	.write          = slatecom_char_write,
 	.release        = slatecom_char_close,
 	.unlocked_ioctl = slate_com_ioctl,
 };
@@ -844,38 +446,31 @@ static int ssr_slate_cb(struct notifier_block *this,
 		unsigned long opcode, void *data)
 {
 	struct slate_event slatee;
-	struct slatedaemon_priv *dev = container_of(slatecom_intf_drv,
-						struct slatedaemon_priv, lhndl);
 
 	switch (opcode) {
 	case SUBSYS_BEFORE_SHUTDOWN:
 		pr_debug("Slate before shutdown\n");
 		slatee.e_type = SLATE_BEFORE_POWER_DOWN;
+		slatecom_slatedown_handler();
 		slatecom_set_spi_state(SLATECOM_SPI_BUSY);
 		send_uevent(&slatee);
-		queue_work(dev->slatecom_wq, &dev->slatecom_down_work);
 		break;
 	case SUBSYS_AFTER_SHUTDOWN:
 		pr_debug("Slate after shutdown\n");
 		slatee.e_type = SLATE_AFTER_POWER_DOWN;
 		slatecom_slatedown_handler();
 		send_uevent(&slatee);
-		set_slate_bt_state(false);
-		set_slate_dsp_state(false);
 		break;
 	case SUBSYS_BEFORE_POWERUP:
 		pr_debug("Slate before powerup\n");
 		slatee.e_type = SLATE_BEFORE_POWER_UP;
+		slatecom_slatedown_handler();
 		send_uevent(&slatee);
-		break;
+	break;
 	case SUBSYS_AFTER_POWERUP:
 		pr_debug("Slate after powerup\n");
-		slatee.e_type = SLATE_AFTER_POWER_UP;
 		slatecom_set_spi_state(SLATECOM_SPI_FREE);
 		send_uevent(&slatee);
-		if (dev->slatecom_current_state == SLATECOM_STATE_INIT ||
-			dev->slatecom_current_state == SLATECOM_STATE_SLATE_SSR)
-			queue_work(dev->slatecom_wq, &dev->slatecom_up_work);
 		break;
 	}
 	return NOTIFY_DONE;
@@ -890,38 +485,21 @@ static int ssr_modem_cb(struct notifier_block *this,
 		unsigned long opcode, void *data)
 {
 	struct slate_event modeme;
-	struct msg_header_t msg_header = {0, 0};
-	int ret = 0;
+	int ret;
 
 	switch (opcode) {
-	case SUBSYS_AFTER_DS_ENTRY:
-		msg_header.opcode = GMI_MGR_SSR_MPSS_DOWN_NOTIFICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send mdsp down event to slate\n");
-		break;
 	case SUBSYS_BEFORE_SHUTDOWN:
 		modeme.e_type = MODEM_BEFORE_POWER_DOWN;
 		reinit_completion(&slate_modem_down_wait);
 		send_uevent(&modeme);
-		msg_header.opcode = GMI_MGR_SSR_MPSS_DOWN_NOTIFICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send mdsp down event to slate\n");
-		break;
-	case SUBSYS_AFTER_DS_EXIT:
-		msg_header.opcode = GMI_MGR_SSR_MPSS_UP_NOTIFICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send mdsp up event to slate\n");
+		ret = wait_for_completion_timeout(&slate_modem_down_wait,
+			msecs_to_jiffies(MPPS_DOWN_EVENT_TO_SLATE_TIMEOUT));
+		if (!ret)
+			pr_err("Time out on modem down event\n");
 		break;
 	case SUBSYS_AFTER_POWERUP:
 		modeme.e_type = MODEM_AFTER_POWER_UP;
 		send_uevent(&modeme);
-		msg_header.opcode = GMI_MGR_SSR_MPSS_UP_NOTIFICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send mdsp up event to slate\n");
 		break;
 	}
 	return NOTIFY_DONE;
@@ -931,38 +509,21 @@ static int ssr_adsp_cb(struct notifier_block *this,
 		unsigned long opcode, void *data)
 {
 	struct slate_event adspe;
-	struct msg_header_t msg_header = {0, 0};
-	int ret = 0;
+	int ret;
 
 	switch (opcode) {
-	case SUBSYS_AFTER_DS_ENTRY:
-		msg_header.opcode = GMI_MGR_SSR_ADSP_DOWN_INDICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send adsp down event to slate\n");
-		break;
 	case SUBSYS_BEFORE_SHUTDOWN:
 		adspe.e_type = ADSP_BEFORE_POWER_DOWN;
 		reinit_completion(&slate_adsp_down_wait);
 		send_uevent(&adspe);
-		msg_header.opcode = GMI_MGR_SSR_ADSP_DOWN_INDICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send adsp up event to slate\n");
-		break;
-	case SUBSYS_AFTER_DS_EXIT:
-		msg_header.opcode = GMI_MGR_SSR_ADSP_UP_INDICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send adsp up event to slate\n");
+		ret = wait_for_completion_timeout(&slate_adsp_down_wait,
+			msecs_to_jiffies(ADSP_DOWN_EVENT_TO_SLATE_TIMEOUT));
+		if (!ret)
+			pr_err("Time out on adsp down event\n");
 		break;
 	case SUBSYS_AFTER_POWERUP:
 		adspe.e_type = ADSP_AFTER_POWER_UP;
 		send_uevent(&adspe);
-		msg_header.opcode = GMI_MGR_SSR_ADSP_UP_INDICATION;
-		ret = slatecom_tx_msg(dev, &(msg_header.opcode), sizeof(msg_header.opcode));
-		if (ret < 0)
-			pr_err("failed to send adsp up event to slate\n");
 		break;
 	}
 	return NOTIFY_DONE;
@@ -995,13 +556,9 @@ void set_slate_dsp_state(bool status)
 	if (!status) {
 		statee.e_type = SLATE_DSP_ERROR;
 		strlcpy(dspss_state, "error", BUF_SIZE);
-		srcu_notifier_call_chain(&slatecom_notifier_chain,
-					 DSP_ERROR, NULL);
 	} else {
 		statee.e_type = SLATE_DSP_READY;
 		strlcpy(dspss_state, "ready", BUF_SIZE);
-		srcu_notifier_call_chain(&slatecom_notifier_chain,
-					 DSP_READY, NULL);
 	}
 	send_uevent(&statee);
 }
@@ -1015,35 +572,13 @@ void set_slate_bt_state(bool status)
 	if (!status) {
 		statee.e_type = SLATE_BT_ERROR;
 		strlcpy(btss_state, "error", BUF_SIZE);
-		srcu_notifier_call_chain(&slatecom_notifier_chain,
-					 BT_ERROR, NULL);
 	} else {
 		statee.e_type = SLATE_BT_READY;
 		strlcpy(btss_state, "ready", BUF_SIZE);
-		srcu_notifier_call_chain(&slatecom_notifier_chain,
-					 BT_READY, NULL);
 	}
 	send_uevent(&statee);
 }
 EXPORT_SYMBOL(set_slate_bt_state);
-
-void *slatecom_register_notifier(struct notifier_block *nb)
-{
-	int ret = 0;
-
-	ret = srcu_notifier_chain_register(&slatecom_notifier_chain, nb);
-	if (ret < 0)
-		return ERR_PTR(ret);
-
-	return &slatecom_notifier_chain;
-}
-EXPORT_SYMBOL(slatecom_register_notifier);
-
-int slatecom_unregister_notifier(void *notify, struct notifier_block *nb)
-{
-	return srcu_notifier_chain_unregister(notify, nb);
-}
-EXPORT_SYMBOL(slatecom_unregister_notifier);
 
 static struct notifier_block ssr_modem_nb = {
 	.notifier_call = ssr_modem_cb,
@@ -1111,7 +646,7 @@ static void ssr_register(void)
 
 static int __init init_slate_com_dev(void)
 {
-	int ret, i = 0;
+	int ret, i;
 
 	ret = alloc_chrdev_region(&slate_dev, 0, 1, SLATECOM);
 	if (ret  < 0) {
@@ -1157,14 +692,14 @@ static int __init init_slate_com_dev(void)
 	if (platform_driver_register(&slate_daemon_driver))
 		pr_err("%s: failed to register slate-daemon register\n", __func__);
 
-	srcu_init_notifier_head(&slatecom_notifier_chain);
+	ssr_register();
 
 	return 0;
 }
 
 static void __exit exit_slate_com_dev(void)
 {
-	int i = 0;
+	int i;
 	device_destroy(slate_class, slate_dev);
 	class_destroy(slate_class);
 	for (i = 0; i < SLATECOM_INTF_N_FILES; i++)

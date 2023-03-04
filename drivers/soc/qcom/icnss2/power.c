@@ -15,26 +15,18 @@
 #include "power.h"
 
 static struct icnss_vreg_cfg icnss_wcn6750_vreg_list[] = {
-	{"vdd-cx-mx", 824000, 952000, 0, 0, 0, false, true, 0},
-	{"vdd-1.8-xo", 1872000, 1872000, 0, 0, 0, false, true, 0},
-	{"vdd-1.3-rfa", 1256000, 1352000, 0, 0, 0, false, true, 0},
+	{"vdd-cx-mx", 824000, 952000, 0, 0, 0, false, true},
+	{"vdd-1.8-xo", 1872000, 1872000, 0, 0, 0, false, true},
+	{"vdd-1.3-rfa", 1256000, 1352000, 0, 0, 0, false, true},
 };
 
 static struct icnss_vreg_cfg icnss_adrestea_vreg_list[] = {
-	{"vdd-cx-mx", 752000, 752000, 0, 0, 0, false, true, 0},
-	{"vdd-1.8-xo", 1800000, 1800000, 0, 0, 0, false, true, 0},
-	{"vdd-1.3-rfa", 1304000, 1304000, 0, 0, 0, false, true, 0},
-	{"vdd-3.3-ch1", 3312000, 3312000, 0, 0, 0, false, true, 0},
-	{"vdd-3.3-ch0", 3312000, 3312000, 0, 0, 0, false, true, 0},
-	{"vdd-smps", 984000, 984000, 0, 0, 0, false, true, 0},
-};
-
-static struct icnss_battery_level icnss_battery_level[] = {
-	{70, 3300000},
-	{60, 3200000},
-	{50, 3100000},
-	{25, 3000000},
-	{0, 2850000},
+	{"vdd-cx-mx", 752000, 752000, 0, 0, 0, false, true},
+	{"vdd-1.8-xo", 1800000, 1800000, 0, 0, 0, false, true},
+	{"vdd-1.3-rfa", 1304000, 1304000, 0, 0, 0, false, true},
+	{"vdd-3.3-ch1", 3312000, 3312000, 0, 0, 0, false, true},
+	{"vdd-3.3-ch0", 3312000, 3312000, 0, 0, 0, false, true},
+	{"vdd-smps", 984000, 984000, 0, 0, 0, false, true},
 };
 
 static struct icnss_clk_cfg icnss_clk_list[] = {
@@ -62,9 +54,6 @@ static struct icnss_clk_cfg icnss_adrestea_clk_list[] = {
 #define MAX_TCS_NUM			8
 #define MAX_TCS_CMD_NUM			5
 #define BT_CXMX_VOLTAGE_MV		950
-
-#define ICNSS_BATTERY_LEVEL_COUNT	ARRAY_SIZE(icnss_battery_level)
-#define ICNSS_MAX_BATTERY_LEVEL		100
 
 static int icnss_get_vreg_single(struct icnss_priv *priv,
 				 struct icnss_vreg_info *vreg)
@@ -141,9 +130,6 @@ static int icnss_get_vreg_single(struct icnss_priv *priv,
 			else
 				vreg->cfg.need_unvote = 0;
 			break;
-		case 5:
-			vreg->cfg.no_vote_on_wifi_active = be32_to_cpup(&prop[5]);
-			break;
 		default:
 			icnss_pr_dbg("Property %s, ignoring value at %d\n",
 				     prop_name, i);
@@ -152,11 +138,10 @@ static int icnss_get_vreg_single(struct icnss_priv *priv,
 	}
 
 done:
-	icnss_pr_dbg("Got regulator: %s, min_uv: %u, max_uv: %u, load_ua: %u, delay_us: %u, need_unvote: %u, no_vote_on_wifi_active: %u\n",
+	icnss_pr_dbg("Got regulator: %s, min_uv: %u, max_uv: %u, load_ua: %u, delay_us: %u, need_unvote: %u\n",
 		     vreg->cfg.name, vreg->cfg.min_uv,
 		     vreg->cfg.max_uv, vreg->cfg.load_ua,
-		     vreg->cfg.delay_us, vreg->cfg.need_unvote,
-		     vreg->cfg.no_vote_on_wifi_active);
+		     vreg->cfg.delay_us, vreg->cfg.need_unvote);
 
 	return 0;
 
@@ -364,15 +349,6 @@ static int icnss_vreg_on(struct icnss_priv *priv)
 				vreg->cfg.is_supported = false;
 				continue;
 			}
-		}
-
-		/*
-		 * If no_vote_on_wifi_active is set then skip voting for that
-		 * particular regulator
-		 */
-		if (vreg->cfg.no_vote_on_wifi_active) {
-			icnss_pr_err("skipping %s\n", vreg->cfg.name);
-			continue;
 		}
 
 		ret = icnss_vreg_on_single(vreg);
@@ -618,24 +594,6 @@ static int icnss_clk_off(struct list_head *clk_list)
 	return 0;
 }
 
-void icnss_enable_regulator(struct icnss_priv *priv)
-{
-	struct list_head *vreg_list = &priv->vreg_list;
-	struct icnss_vreg_info *vreg;
-
-	/*
-	 * Parse through all regulators and enable it if no_vote_on_wifi_active
-	 * parameter is set.
-	 */
-	list_for_each_entry(vreg, vreg_list, list) {
-		if (IS_ERR_OR_NULL(vreg->reg) || !vreg->cfg.is_supported ||
-		    !vreg->cfg.no_vote_on_wifi_active)
-			continue;
-
-		icnss_vreg_on_single(vreg);
-	}
-}
-
 int icnss_hw_power_on(struct icnss_priv *priv)
 {
 	int ret = 0;
@@ -859,110 +817,6 @@ int icnss_init_vph_monitor(struct icnss_priv *priv)
 	ret = icnss_setup_vph_monitor(priv);
 	if (ret)
 		goto out;
-out:
-	return ret;
-}
-
-static int icnss_get_battery_level(struct icnss_priv *priv)
-{
-	int err = 0, battery_percentage = 0;
-	union power_supply_propval psp = {0,};
-
-	if (!priv->batt_psy)
-		priv->batt_psy = power_supply_get_by_name("battery");
-
-	if (priv->batt_psy) {
-		err = power_supply_get_property(priv->batt_psy,
-						POWER_SUPPLY_PROP_CAPACITY,
-						&psp);
-		if (err) {
-			icnss_pr_err("battery percentage read error:%d\n", err);
-			goto out;
-		}
-		battery_percentage = psp.intval;
-	}
-
-	icnss_pr_info("Battery Percentage: %d\n", battery_percentage);
-out:
-	return battery_percentage;
-}
-
-static void icnss_update_soc_level(struct work_struct *work)
-{
-	int battery_percentage = 0, current_updated_voltage = 0, err = 0;
-	int level_count;
-	struct icnss_priv *priv = container_of(work, struct icnss_priv, soc_update_work);
-
-	battery_percentage = icnss_get_battery_level(priv);
-	if (!battery_percentage ||
-	    battery_percentage > ICNSS_MAX_BATTERY_LEVEL) {
-		icnss_pr_err("Battery percentage read failure\n");
-		return;
-	}
-
-	for (level_count = 0; level_count < ICNSS_BATTERY_LEVEL_COUNT;
-	     level_count++) {
-		if (battery_percentage >=
-		    icnss_battery_level[level_count].lower_battery_threshold) {
-			current_updated_voltage =
-				icnss_battery_level[level_count].ldo_voltage;
-			break;
-		}
-	}
-
-	if (level_count != ICNSS_BATTERY_LEVEL_COUNT &&
-	    priv->last_updated_voltage != current_updated_voltage) {
-		err = icnss_send_vbatt_update(priv, current_updated_voltage);
-		if (err < 0) {
-			icnss_pr_err("Unable to update ldo voltage");
-			return;
-		}
-		priv->last_updated_voltage = current_updated_voltage;
-	}
-}
-
-static int icnss_battery_supply_callback(struct notifier_block *nb,
-					 unsigned long event, void *data)
-{
-	struct power_supply *psy = data;
-	struct icnss_priv *priv = container_of(nb, struct icnss_priv,
-					       psf_nb);
-	if (strcmp(psy->desc->name, "battery"))
-		return NOTIFY_OK;
-
-	if (test_bit(ICNSS_WLFW_CONNECTED, &priv->state) &&
-	    !test_bit(ICNSS_FW_DOWN, &priv->state))
-		queue_work(priv->soc_update_wq, &priv->soc_update_work);
-
-	return NOTIFY_OK;
-}
-
-int icnss_get_psf_info(struct icnss_priv *priv)
-{
-	int ret = 0;
-
-	priv->soc_update_wq = alloc_workqueue("icnss_soc_update",
-					      WQ_UNBOUND, 1);
-	if (!priv->soc_update_wq) {
-		icnss_pr_err("Workqueue creation failed for soc update\n");
-		ret = -EFAULT;
-		goto out;
-	}
-
-	priv->psf_nb.notifier_call = icnss_battery_supply_callback;
-	ret = power_supply_reg_notifier(&priv->psf_nb);
-	if (ret < 0) {
-		icnss_pr_err("Power supply framework registration err: %d\n",
-			     ret);
-		goto err_psf_registration;
-	}
-
-	INIT_WORK(&priv->soc_update_work, icnss_update_soc_level);
-
-	return 0;
-
-err_psf_registration:
-	destroy_workqueue(priv->soc_update_wq);
 out:
 	return ret;
 }

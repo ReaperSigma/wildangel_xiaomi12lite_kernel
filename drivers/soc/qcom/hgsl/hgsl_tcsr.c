@@ -54,10 +54,7 @@ static irqreturn_t hgsl_tcsr_isr(int irq, void *ptr)
 	regmap_read(tcsr->regmap, TCSR_COMPUTE_SIGNAL_STATUS_REG, &status);
 	regmap_write(tcsr->regmap, TCSR_COMPUTE_SIGNAL_CLEAR_REG, status);
 
-	if (tcsr->isr)
-		return tcsr->isr(tcsr->client_dev, status);
-	else
-		return IRQ_HANDLED;
+	return tcsr->isr(tcsr->client_dev, status);
 }
 
 static int hgsl_tcsr_init_sender(struct hgsl_tcsr *tcsr)
@@ -105,8 +102,8 @@ static int hgsl_tcsr_init_receiver(struct hgsl_tcsr *tcsr)
 		return -ENODEV;
 	}
 
-	ret = request_irq(tcsr->irq_num, hgsl_tcsr_isr,
-			IRQF_TRIGGER_HIGH, "hgsl-tcsr", tcsr);
+	ret = devm_request_irq(dev, tcsr->irq_num, hgsl_tcsr_isr,
+				IRQF_TRIGGER_HIGH, "hgsl-tcsr", tcsr);
 	if (ret < 0) {
 		dev_err(dev, "failed to request IRQ%u: %d\n",
 				tcsr->irq_num, ret);
@@ -125,7 +122,7 @@ struct hgsl_tcsr *hgsl_tcsr_request(struct platform_device *pdev,
 				irqreturn_t (*isr)(struct device *, u32))
 {
 	struct hgsl_tcsr *tcsr = platform_get_drvdata(pdev);
-	int ret = -EINVAL;
+	int ret;
 
 	if (!tcsr)
 		return ERR_PTR(-ENODEV);
@@ -140,22 +137,17 @@ struct hgsl_tcsr *hgsl_tcsr_request(struct platform_device *pdev,
 		else if (!isr)
 			return ERR_PTR(-EINVAL);
 
-		tcsr->client_dev = client;
-		tcsr->isr = isr;
-
 		ret = hgsl_tcsr_init_receiver(tcsr);
 	} else { /* HGSL_TCSR_ROLE_SENDER */
 		if (isr)
 			return ERR_PTR(-EINVAL);
 
-		tcsr->client_dev = client;
 		ret = hgsl_tcsr_init_sender(tcsr);
 	}
 
-	if (ret) {
-		tcsr = ERR_PTR(ret);
-		tcsr->client_dev = NULL;
-		tcsr->isr = NULL;
+	if (ret == 0) {
+		tcsr->client_dev = client;
+		tcsr->isr = isr;
 	}
 
 	return tcsr;
@@ -163,10 +155,6 @@ struct hgsl_tcsr *hgsl_tcsr_request(struct platform_device *pdev,
 
 void hgsl_tcsr_free(struct hgsl_tcsr *tcsr)
 {
-	if ((tcsr->role == HGSL_TCSR_ROLE_RECEIVER) &&
-		(tcsr->irq_num != 0) && (tcsr->isr != NULL))
-		free_irq(tcsr->irq_num, tcsr);
-
 	tcsr->client_dev = NULL;
 	tcsr->isr = NULL;
 }
