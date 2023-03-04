@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt) "QCOM-BATT: %s: " fmt, __func__
@@ -1169,8 +1169,7 @@ static void fcc_stepper_work(struct work_struct *work)
 		chip->main_step_fcc_count--;
 		reschedule_ms = chip->chg_param->fcc_step_delay_ms;
 	} else if (chip->main_step_fcc_residual) {
-		main_fcc += chip->main_step_fcc_residual
-					* chip->main_step_fcc_dir;
+		main_fcc += chip->main_step_fcc_residual;
 		chip->main_step_fcc_residual = 0;
 	}
 
@@ -2239,7 +2238,6 @@ void qcom_batt_deinit(void)
 	destroy_votable(chip->fv_votable);
 	destroy_votable(chip->fcc_votable);
 	destroy_votable(chip->fcc_main_votable);
-	destroy_votable(chip->usb_icl_votable);
 	wakeup_source_unregister(chip->pl_ws);
 	the_chip = NULL;
 	kfree(chip);

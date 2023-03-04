@@ -43,7 +43,7 @@ int qbg_sdam_write(struct qti_qbg *chip, int offset, u8 *data, int len)
 int qbg_sdam_get_fifo_data(struct qti_qbg *chip, struct fifo_data *fifo,
 				u32 fifo_count)
 {
-	int rc = 0, i = 0;
+	int rc, i;
 	u32 num_sdams, fifo_data_length, bytes_read = 0, bytes_remaining;
 
 	fifo_data_length = fifo_count * QBG_ONE_FIFO_LENGTH;

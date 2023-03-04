@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"QBG_K: %s: " fmt, __func__
 
 #include <linux/cdev.h>
 #include <linux/device.h>
-#include <linux/debugfs.h>
 #include <linux/errno.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/ioctl.h>
 #include <linux/kernel.h>
-#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/of.h>
@@ -23,12 +20,10 @@
 #include <linux/platform_device.h>
 #include <linux/poll.h>
 #include <linux/power_supply.h>
-#include <linux/pm_wakeup.h>
 #include <linux/qti_power_supply.h>
 #include <linux/regmap.h>
 #include <linux/rtc.h>
 #include <linux/slab.h>
-#include <linux/suspend.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
 
@@ -36,6 +31,7 @@
 
 #include <uapi/linux/qbg.h>
 #include <uapi/linux/qbg-profile.h>
+
 #include "qbg-iio.h"
 #include "qbg-battery-profile.h"
 #include "qbg-core.h"
@@ -90,10 +86,6 @@
 
 #define QBG_MAIN_LAST_BURST_AVG_ACC2_DATA0		0xA4
 
-/* PM5100 REVID */
-#define REVID_REVISION4					0x103
-#define REVISION_V1					0x1
-
 #define QBG_FAST_CHAR_DELTA_MS				100000
 #define VBATT_1S_LSB					19463
 #define IBATT_10A_LSB					6103
@@ -113,18 +105,7 @@
 #define MICRO_TO_10NANO				100
 #define MILLI_TO_MICRO				1000
 
-/* PM5100 ADC_CMN and ADC_CMN_WB register definitions */
-#define BAT_THERM_IBAT_CTL_2			0x62
-#define VADC_ANA_PARAM_4			0x46
-
 static int qbg_debug_mask;
-
-enum qbg_esr_fcc_reduction {
-	ESR_FCC_150MA = 0x6,
-};
-
-#define ESR_PULSE_10NA(x)	(-(x * 25 * MILLI_TO_10NANO))
-#define ESR_IBAT_QUALIFY_OFFSET_10NA	(-5000000)
 
 static const unsigned int qbg_accum_interval[8] = {
 	10000, 20000, 50000, 100000, 150000, 200000, 500000, 1000000};
@@ -188,52 +169,6 @@ int qbg_write(struct qti_qbg *chip, u32 addr, u8 *val, int len)
 	return 0;
 }
 
-static bool is_chan_valid(struct qti_qbg *chip, enum qbg_ext_iio_channels chan)
-{
-	int rc;
-
-	if (IS_ERR(chip->ext_iio_chans[chan]))
-		return false;
-
-	if (!chip->ext_iio_chans[chan]) {
-		chip->ext_iio_chans[chan] = iio_channel_get(chip->dev,
-					qbg_ext_iio_chan_name[chan]);
-		if (IS_ERR(chip->ext_iio_chans[chan])) {
-			rc = PTR_ERR(chip->ext_iio_chans[chan]);
-			if (rc == -EPROBE_DEFER)
-				chip->ext_iio_chans[chan] = NULL;
-
-			pr_err("Failed to get IIO channel %s, rc=%d\n",
-				qbg_ext_iio_chan_name[chan], rc);
-			return false;
-		}
-	}
-
-	return true;
-}
-
-static int qbg_read_iio_chan(struct qti_qbg *chip, enum qbg_ext_iio_channels chan,
-				int *val)
-{
-	int rc;
-
-	if (is_chan_valid(chip, chan)) {
-		rc = iio_read_channel_processed(chip->ext_iio_chans[chan], val);
-		return (rc < 0) ? rc : 0;
-	}
-
-	return -EINVAL;
-}
-
-static int qbg_write_iio_chan(struct qti_qbg *chip, enum qbg_ext_iio_channels chan,
-				int val)
-{
-	if (is_chan_valid(chip, chan))
-		return iio_write_channel_raw(chip->ext_iio_chans[chan], val);
-
-	return -EINVAL;
-}
-
 static void qbg_notify_charger(struct qti_qbg *chip)
 {
 	union power_supply_propval prop = {0, };
@@ -260,26 +195,12 @@ static void qbg_notify_charger(struct qti_qbg *chip)
 		return;
 	}
 
-	if (chip->default_iterm_ma != -EINVAL) {
-		prop.intval = chip->default_iterm_ma;
-		rc = power_supply_set_property(chip->batt_psy,
-				POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT, &prop);
-		if (rc < 0) {
-			pr_err("Failed to set charge_current_max property on batt_psy, rc=%d\n",
-				rc);
-			return;
-		}
-	}
-
-	pr_debug("Notified charger on float voltage:%d uV and FCC:%d mA iterm:%d mA\n",
-			chip->float_volt_uv, chip->fastchg_curr_ma, chip->default_iterm_ma);
+	pr_debug("Notified charger on float voltage:%d uV and FCC:%d mA\n",
+			chip->float_volt_uv, chip->fastchg_curr_ma);
 }
 
 static bool is_batt_available(struct qti_qbg *chip)
 {
-	int rc;
-	union power_supply_propval prop = {0, };
-
 	if (chip->batt_psy)
 		return true;
 
@@ -290,97 +211,7 @@ static bool is_batt_available(struct qti_qbg *chip)
 	/* batt_psy is initialized, set the fcc and fv */
 	qbg_notify_charger(chip);
 
-	/*
-	 * Read termination current from charger,
-	 * Use it to configure iterm after recharge upon USB removal.
-	 */
-	rc = power_supply_get_property(chip->batt_psy,
-			POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT, &prop);
-	if (!rc)
-		chip->default_iterm_ma = prop.intval;
-
 	return true;
-}
-
-static bool is_usb_available(struct qti_qbg *chip)
-{
-	if (chip->usb_psy)
-		return true;
-
-	chip->usb_psy = power_supply_get_by_name("usb");
-	if (!chip->usb_psy)
-		return false;
-
-	return true;
-}
-
-#define DEFAULT_RECHARGE_SOC 95
-static int qbg_charge_full_update(struct qti_qbg *chip)
-{
-	union power_supply_propval prop = {0, };
-	int rc, recharge_soc, health, val;
-
-	/* Nothing to process */
-	if (!chip->charger_present || !chip->charge_done)
-		return 0;
-
-	rc = power_supply_get_property(chip->batt_psy,
-			POWER_SUPPLY_PROP_HEALTH, &prop);
-	if (rc < 0) {
-		pr_err("Failed to get battery health, rc=%d\n", rc);
-		return rc;
-	}
-	health = prop.intval;
-
-	rc = qbg_read_iio_chan(chip, RECHARGE_SOC, &val);
-	if (rc < 0 || val < 0) {
-		pr_debug("Failed to get recharge-soc, rc=%d\n", rc);
-		recharge_soc = DEFAULT_RECHARGE_SOC;
-	} else {
-		recharge_soc = val;
-	}
-	chip->recharge_soc = recharge_soc;
-
-qbg_dbg(chip, QBG_DEBUG_STATUS, "msoc=%d sys_soc:%d charge_done:%d charge_status=%d recharge_soc=%d in_recharge:%u\n",
-			chip->soc, chip->sys_soc, chip->charge_done,
-			chip->charge_status, chip->recharge_soc, chip->in_recharge);
-
-	if (chip->charge_status == POWER_SUPPLY_STATUS_CHARGING) {
-		/* Charger is charging in recharge */
-		return 0;
-	}
-
-	/* System SOC has not dropped below recharge SOC to trigger recharge */
-	if (chip->sys_soc > recharge_soc)
-		return 0;
-
-	if (!chip->in_recharge) {
-		if (chip->recharge_vflt_delta_mv && chip->recharge_vflt_delta_mv != -EINVAL) {
-			prop.intval = (chip->float_volt_uv) - (chip->recharge_vflt_delta_mv * 1000);
-			rc = power_supply_set_property(chip->batt_psy,
-					POWER_SUPPLY_PROP_VOLTAGE_MAX, &prop);
-			if (rc < 0) {
-				pr_err("Failed to set recharge voltage_max property on batt_psy, rc=%d\n",
-					rc);
-				return rc;
-			}
-		}
-
-		if (chip->recharge_iterm_ma && chip->recharge_iterm_ma != -EINVAL) {
-			prop.intval = chip->recharge_iterm_ma;
-			prop.intval = (-1 * prop.intval);
-			rc = power_supply_set_property(chip->batt_psy,
-					POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT, &prop);
-			if (rc < 0) {
-				pr_err("Failed to set recharge charge_term_current property on batt_psy, rc=%d\n",
-					rc);
-				return rc;
-			}
-		}
-		chip->in_recharge = true;
-	}
-
-	return rc;
 }
 
 static void status_change_work(struct work_struct *work)
@@ -388,12 +219,9 @@ static void status_change_work(struct work_struct *work)
 	struct qti_qbg *chip = container_of(work, struct qti_qbg,
 						status_change_work);
 	union power_supply_propval prop = {0, };
-	int rc, val, charger_present = 0;
+	int rc;
 
 	if (!is_batt_available(chip))
-		return;
-
-	if (!is_usb_available(chip))
 		return;
 
 	rc = power_supply_get_property(chip->batt_psy,
@@ -402,64 +230,6 @@ static void status_change_work(struct work_struct *work)
 		pr_err("Failed to get charge-type, rc=%d\n", rc);
 	else
 		chip->charge_type = prop.intval;
-
-	rc = power_supply_get_property(chip->batt_psy,
-			POWER_SUPPLY_PROP_STATUS, &prop);
-	if (rc < 0)
-		pr_err("Failed to get charger status, rc=%d\n", rc);
-	else
-		chip->charge_status = prop.intval;
-
-	rc = qbg_read_iio_chan(chip, CHARGE_DONE, &val);
-	if (rc < 0)
-		pr_err("Failed to get charge done status, rc=%d\n", rc);
-	else
-		chip->charge_done = val;
-
-	rc = power_supply_get_property(chip->usb_psy,
-			POWER_SUPPLY_PROP_PRESENT, &prop);
-	if (rc < 0)
-		pr_err("Failed to get charger present, rc=%d\n", rc);
-	else
-		charger_present = prop.intval;
-
-	qbg_dbg(chip, QBG_DEBUG_STATUS, "charge_status=%d charge_done=%d charger_present:%d\n",
-			chip->charge_status, chip->charge_done, chip->charger_present);
-
-	/*
-	 * Set FCC and iterm back to default value on charger removal
-	 * as they could have been updated during recharge.
-	 */
-	if (chip->charger_present && !charger_present) {
-		qbg_notify_charger(chip);
-		chip->in_recharge = false;
-	}
-	chip->charger_present = charger_present;
-
-	rc = qbg_charge_full_update(chip);
-	if (rc < 0) {
-		pr_err("Failed in charge full update, rc=%d\n", rc);
-		return;
-	}
-}
-
-static int qbg_get_max_fifo_count(struct qti_qbg *chip)
-{
-	int rc = 0;
-	u8 val[2];
-
-	rc = qbg_sdam_read(chip,
-		QBG_SDAM_BASE(chip, SDAM_CTRL0) + QBG_SDAM_MAX_FIFO_COUNT_OFFSET,
-		val, 2);
-	if (rc < 0) {
-		pr_err("Failed to read QBG SDAM_MAX_FIFO_COUNT_OFFSET, rc=%d\n", rc);
-		return rc;
-	}
-
-	chip->max_fifo_count = (val[1] << 8) | val[0];
-	qbg_dbg(chip, QBG_DEBUG_SDAM, "max FIFO count=%d\n", chip->max_fifo_count);
-
-	return rc;
 }
 
 static int qbg_get_fifo_count(struct qti_qbg *chip, u32 *fifo_count)
@@ -477,27 +247,6 @@ static int qbg_get_fifo_count(struct qti_qbg *chip, u32 *fifo_count)
 
 	*fifo_count = (val[1] << 8) | val[0];
 	qbg_dbg(chip, QBG_DEBUG_SDAM, "FIFO count=%d\n", *fifo_count);
-
-	return rc;
-}
-
-static int qbg_hpm_fifo_depth_half(struct qti_qbg *chip, int current_fifo_count, bool enable)
-{
-	int rc = 0;
-	u8 val = 0;
-
-	if (enable)
-		val = current_fifo_count / 2;
-	else
-		val = current_fifo_count * 2;
-
-	if (val > chip->max_fifo_count)
-		val = chip->max_fifo_count;
-
-	rc = qbg_sdam_write(chip, QBG_SDAM_BASE(chip, SDAM_CTRL0) +
-			QBG_SDAM_HPM_FIFO_COUNT_OFFSET, &val, 1);
-	if (rc < 0)
-		pr_err("Failed to write QBG SDAM, rc=%d\n", rc);
 
 	return rc;
 }
@@ -543,13 +292,8 @@ static void process_udata_work(struct work_struct *work)
 				chip->udata.param[QBG_PARAM_SYS_SOC].valid ?
 				chip->udata.param[QBG_PARAM_SYS_SOC].data : -EINVAL);
 
-		if (chip->udata.param[QBG_PARAM_SYS_SOC].valid) {
+		if (chip->udata.param[QBG_PARAM_SYS_SOC].valid)
 			chip->sys_soc = chip->udata.param[QBG_PARAM_SYS_SOC].data;
-
-			rc = qbg_write_iio_chan(chip, SYS_SOC, chip->sys_soc);
-			if (rc < 0)
-				pr_err("Failed to write battery sys_soc, rc=%d\n", rc);
-		}
 
 		chip->soc = chip->udata.param[QBG_PARAM_SOC].data;
 	}
@@ -599,8 +343,6 @@ static void process_udata_work(struct work_struct *work)
 	rc = qbg_sdam_set_battery_id(chip, chip->batt_id_ohm / 1000);
 	if (rc < 0)
 		pr_err("Failed to set battid in sdam, rc=%d\n", rc);
-
-	__pm_relax(chip->qbg_ws);
 
 	qbg_dbg(chip, QBG_DEBUG_STATUS, "udata update: batt_soc=%d sys_soc=%d soc=%d qbg_esr=%d\n",
 		(chip->batt_soc != INT_MIN) ? chip->batt_soc : -EINVAL,
@@ -668,58 +410,14 @@ close_time:
 	return rc;
 }
 
-#define BAT_THERM_CAL_DENOM		2080
-#define BAT_THERM_CAL_NUM		10000
-#define BAT_THERM_SCALE			100
-static int qbg_set_therm_trace_resistance(struct qti_qbg *chip, int vref_adc,
-			int tbat_adc, int ibat_10na, int ibat_esr_10na, int tbat_esr_adc)
-{
-	int rc = 0;
-	int64_t r_pack_nom = 0;
-	int64_t r_pack = 0;
-	int64_t r_pack_denom = 0;
-	u8 reg_val = 0;
-
-	int tbat_decidegree = div64_s64(((int64_t)tbat_adc * TBAT_LSB * BAT_THERM_SCALE),
-					TBAT_DENOMINATOR);
-	int tbat_esr_decidegree = div64_s64(((int64_t)tbat_esr_adc * TBAT_LSB * BAT_THERM_SCALE),
-					TBAT_DENOMINATOR);
-	int vref_tbat_decidegree = div64_s64(((int64_t)vref_adc * TBAT_LSB * BAT_THERM_SCALE),
-					TBAT_DENOMINATOR);
-
-	r_pack_nom = tbat_decidegree * (vref_tbat_decidegree - tbat_esr_decidegree)
-			- tbat_esr_decidegree * (vref_tbat_decidegree - tbat_decidegree);
-
-	r_pack_denom = DIV_ROUND_CLOSEST(ibat_esr_10na, MILLI_TO_10NANO)
-				* (vref_tbat_decidegree - tbat_decidegree)
-			- DIV_ROUND_CLOSEST(ibat_10na, MILLI_TO_10NANO)
-				* (vref_tbat_decidegree - tbat_esr_decidegree);
-
-	if (r_pack_denom != 0) {
-		r_pack = div64_s64(r_pack_nom * BAT_THERM_CAL_NUM, r_pack_denom);
-		r_pack = div64_s64(r_pack, BAT_THERM_CAL_DENOM);
-		reg_val = (u8)r_pack;
-
-		qbg_dbg(chip, QBG_DEBUG_SDAM, "tbat=%d, tbat_esr=%d vref=%d 10uv, therm trace resistance is %#x\n",
-			tbat_decidegree, tbat_esr_decidegree, vref_tbat_decidegree, reg_val);
-
-		rc = regmap_write(chip->regmap, chip->adc_cmn_wb_base + BAT_THERM_IBAT_CTL_2,
-					reg_val);
-		if (rc < 0)
-			return rc;
-	}
-
-	return 0;
-}
-
 static int qbg_process_fifo(struct qti_qbg *chip, u32 fifo_count)
 {
 	struct fifo_data *fifo;
-	int rc = 0, i = 0, ibat = 0, ibat_esr = 0;
+	int rc, i, ibat, ibat_esr;
 	unsigned char data_tag;
-	unsigned int vbat1 = 0, vbat2 = 0, tbat = 0, ibat_t = 0, esr = 0;
-	unsigned int vbat1_esr = 0, vbat2_esr = 0, tbat_esr = 0, ibat_t_esr = 0;
-	unsigned long timestamp = 0;
+	unsigned int vbat1, vbat2, tbat, ibat_t, esr;
+	unsigned int vbat1_esr, vbat2_esr, tbat_esr, ibat_t_esr;
+	unsigned long timestamp;
 
 	if (!fifo_count) {
 		qbg_dbg(chip, QBG_DEBUG_SDAM, "No FIFO data\n");
@@ -750,12 +448,10 @@ static int qbg_process_fifo(struct qti_qbg *chip, u32 fifo_count)
 	if (fifo_count > QBG_SDAM_ESR_PULSE_FIFO_INDEX)
 		data_tag = fifo[QBG_SDAM_ESR_PULSE_FIFO_INDEX].data_tag;
 
-	data_tag = (data_tag & 0xC0) >> 6;
-
-	if (data_tag == QBG_FAST_CHAR) {
-		if (fifo_count <= QBG_SDAM_ESR_PULSE_FIFO_INDEX) {
+	if (data_tag == QBG_DATA_TAG_FAST_CHAR) {
+		if (fifo_count < QBG_SDAM_ESR_PULSE_FIFO_INDEX) {
 			pr_err("Not enough FIFO samples in fast char mode\n");
-			goto qbg_cal;
+			goto ret;
 		}
 
 		rc = qbg_decode_fifo_data(fifo[QBG_SDAM_ESR_PULSE_FIFO_INDEX - 1],
@@ -764,7 +460,7 @@ static int qbg_process_fifo(struct qti_qbg *chip, u32 fifo_count)
 		if (rc < 0) {
 			pr_err("Couldn't decode FIFO before ESR pulse in fast char mode, rc=%d\n",
 				rc);
-			goto qbg_cal;
+			goto ret;
 		}
 
 		rc = qbg_decode_fifo_data(fifo[QBG_SDAM_ESR_PULSE_FIFO_INDEX],
@@ -774,32 +470,22 @@ static int qbg_process_fifo(struct qti_qbg *chip, u32 fifo_count)
 		if (rc < 0) {
 			pr_err("Couldn't decode FIFO before ESR pulse in fast char mode, rc=%d\n",
 				rc);
-			goto qbg_cal;
+			goto ret;
 		}
 
-		if ((ibat < ibat_esr)
-			&& (ibat < (ESR_PULSE_10NA(ESR_FCC_150MA) + ESR_IBAT_QUALIFY_OFFSET_10NA))
-			&& (vbat1 > vbat1_esr) && (tbat > tbat_esr)) {
-			esr = (vbat1 - vbat1_esr) / ((ibat_esr - ibat) / 10000);
+		if (ibat != ibat_esr && (vbat1 > vbat1_esr)) {
+			esr = (vbat1 - vbat1_esr) / ((ibat_esr - ibat) * 10000);
 			esr *= 10000;
 			chip->esr = esr;
 			qbg_dbg(chip, QBG_DEBUG_SDAM, "ESR:%u, ibat=%d ibat_esr=%d vbat1:%u vbat1_esr:%u\n",
 				esr, ibat, ibat_esr, vbat1, vbat1_esr);
-
-			rc = qbg_set_therm_trace_resistance(chip,
-				fifo[QBG_SDAM_ESR_PULSE_FIFO_INDEX - 1].vref,
-				tbat, ibat, ibat_esr, tbat_esr);
-			if (rc < 0) {
-				pr_err("Failed to set therm trace resistance, rc=%d\n", rc);
-				goto qbg_cal;
-			}
 		} else {
 			pr_err("Couldn't calculate ESR, ibat=%d ibat_esr=%d vbat1:%u vbat1_esr:%u\n",
 				ibat, ibat_esr, vbat1, vbat1_esr);
+			goto ret;
 		}
 	}
 
-qbg_cal:
 	for (i = 0; i < fifo_count; i++) {
 		rc = qbg_decode_fifo_data(fifo[i], &vbat1, &vbat2, &ibat, &tbat,
 						&ibat_t);
@@ -817,23 +503,7 @@ qbg_cal:
 		chip->kdata.fifo[i].tbat = tbat;
 		chip->kdata.fifo[i].ibat = ibat_t;
 		chip->kdata.fifo[i].data_tag = fifo[i].data_tag;
-		chip->kdata.fifo[i].qg_sts = fifo[i].qg_sts;
 	}
-
-	if (!chip->enable_fifo_depth_half && ((-1 * ibat) > chip->rated_capacity)) {
-		chip->enable_fifo_depth_half = true;
-		rc = qbg_hpm_fifo_depth_half(chip, fifo_count, chip->enable_fifo_depth_half);
-		qbg_dbg(chip, QBG_DEBUG_SDAM, "HPM FIFO count reduced by half ibat = %d rated_capacity=%d\n",
-				ibat, chip->rated_capacity);
-	} else if (chip->enable_fifo_depth_half && ((-1 * ibat) < chip->rated_capacity)) {
-		chip->enable_fifo_depth_half = false;
-		rc = qbg_hpm_fifo_depth_half(chip, fifo_count, chip->enable_fifo_depth_half);
-		qbg_dbg(chip, QBG_DEBUG_SDAM, "HPM FIFO count restored ibat = %d rated_capacity=%d\n",
-				ibat, chip->rated_capacity);
-	}
-
-	if (rc < 0)
-		pr_err("Failed to update fifo depth, rc=%d\n", rc);
 
 ret:
 	kfree(fifo);
@@ -932,40 +602,15 @@ static int qbg_init_sdam(struct qti_qbg *chip)
 	return rc;
 }
 
-static int qbg_init_esr(struct qti_qbg *chip)
-{
-	int rc = 0;
-	u8 val = ESR_FCC_150MA;
-
-	rc = qbg_sdam_write(chip,
-		QBG_SDAM_BASE(chip, SDAM_CTRL0) + QBG_ESR_PULSE_FCC_REDUCE_OFFSET, &val, 1);
-	if (rc < 0)
-		pr_err("Failed to write QBG ESR pulse FCC reduction offset, rc=%d\n", rc);
-
-	return rc;
-}
-
 static int qbg_force_fast_char(struct qti_qbg *chip, bool force)
 {
 	int rc = 0;
-	/* The default ground used for BAT_THERM measurement is GND_XOADC*/
-	u8 batt_therm_gnd_sel = 0x80;
 	u8 val = force ? (1 << FORCE_FAST_CHAR_SHIFT) : 0;
 
 	rc = qbg_write(chip, QBG_MAIN_QBG_STATE_FORCE_CMD, &val, 1);
-	if (rc < 0) {
+	if (rc < 0)
 		pr_err("Failed to %s QBG fast char mode, rc=%d\n",
 			force ? "enable" : "disable", rc);
-		return rc;
-	}
-
-	/* Set the ground of BAT_THERM measurement to PACK_SNS_M */
-	if (force)
-		batt_therm_gnd_sel = 0x40;
-
-	rc = regmap_write(chip->regmap, chip->adc_cmn_base + VADC_ANA_PARAM_4, batt_therm_gnd_sel);
-	if (rc < 0)
-		pr_err("Failed to set batt therm gnd sel rc=%d\n", rc);
 
 	return rc;
 }
@@ -974,36 +619,8 @@ static int qbg_handle_fast_char(struct qti_qbg *chip)
 {
 	int rc = 0;
 	ktime_t now;
-	u8 *data;
-	ssize_t len = 0;
-
-	if (chip->skip_esr_state) {
-		data = nvmem_cell_read(chip->skip_esr_state, &len);
-		if (IS_ERR(data)) {
-			pr_err("Failed to read skip_esr_state from SDAM\n");
-			return PTR_ERR(data);
-		}
-
-		if (*data) {
-			qbg_dbg(chip, QBG_DEBUG_STATUS, "skip_esr=1 in_fast_char=%d\n",
-				chip->in_fast_char);
-
-			if (chip->in_fast_char) {
-				rc = qbg_force_fast_char(chip, false);
-				if (rc < 0) {
-					pr_err("Failed to get out of fast char mode, rc=%d\n",
-						rc);
-					return rc;
-				}
-				chip->in_fast_char = false;
-			}
-
-			return 0;
-		}
-	}
 
 	if (chip->in_fast_char) {
-		qbg_dbg(chip, QBG_DEBUG_STATUS, "QBG ESR pulse disabled\n");
 		rc = qbg_force_fast_char(chip, false);
 		if (rc < 0) {
 			pr_err("Failed to get out of fast char mode, rc=%d\n",
@@ -1015,7 +632,7 @@ static int qbg_handle_fast_char(struct qti_qbg *chip)
 		now = ktime_get();
 		if ((ktime_ms_delta(now, chip->last_fast_char_time) >
 			QBG_FAST_CHAR_DELTA_MS) && !chip->in_fast_char) {
-			qbg_dbg(chip, QBG_DEBUG_STATUS, "QBG ESR pulse enabled\n");
+
 			rc = qbg_force_fast_char(chip, true);
 			if (rc < 0) {
 				pr_err("Failed to put QBG to fast char mode, rc=%d\n",
@@ -1038,13 +655,10 @@ static irqreturn_t qbg_data_full_irq_handler(int irq, void *_chip)
 
 	qbg_dbg(chip, QBG_DEBUG_IRQ, "DATA FULL IRQ triggered\n");
 
-	/* Disable fast char for PM5100 V1 */
-	if (chip->rev4 != REVISION_V1) {
-		rc = qbg_handle_fast_char(chip);
-		if (rc < 0) {
-			pr_err("Failed to handle QBG fast char, rc=%d\n", rc);
-			return IRQ_HANDLED;
-		}
+	rc = qbg_handle_fast_char(chip);
+	if (rc < 0) {
+		pr_err("Failed to handle QBG fast char, rc=%d\n", rc);
+		return IRQ_HANDLED;
 	}
 
 	mutex_lock(&chip->fifo_lock);
@@ -1303,9 +917,6 @@ static int parse_step_chg_jeita_params(struct qti_qbg *chip, struct device_node 
 	return 0;
 }
 
-#define QBG_DEFAULT_RECHARGE_ITERM_MA                   150
-#define QBG_DEFAULT_RECHARGE_SOC_DELTA                  5
-#define QBG_DEFAULT_RECHARGE_VFLT_DELTA                 100
 static int qbg_load_battery_profile(struct qti_qbg *chip)
 {
 	struct device_node *node = chip->dev->of_node;
@@ -1321,8 +932,8 @@ static int qbg_load_battery_profile(struct qti_qbg *chip)
 
 	profile_node = of_batterydata_get_best_profile(chip->batt_node,
 			chip->batt_id_ohm / 1000, NULL);
-	if (IS_ERR_OR_NULL(profile_node)) {
-		rc = profile_node ? PTR_ERR(profile_node) : -EINVAL;
+	if (IS_ERR(profile_node)) {
+		rc = PTR_ERR(profile_node);
 		pr_err("Failed to detect valid QBG battery profile, rc=%d\n",
 			rc);
 		goto out;
@@ -1364,38 +975,12 @@ static int qbg_load_battery_profile(struct qti_qbg *chip)
 		goto out;
 	}
 
-	rc = of_property_read_u32(profile_node, "qcom,capacity", &chip->rated_capacity);
-	if (rc < 0) {
-		pr_err("Failed to read battery rated capacity, rc:%d\n", rc);
-		chip->rated_capacity = -EINVAL;
-		goto out;
-	}
-	chip->rated_capacity *= MILLI_TO_10NANO;
-
 	rc = of_property_read_u32_array(profile_node, "qcom,battery-capacity", temp, 2);
 	if (rc) {
 		pr_err("Failed to read battery nominal capacity, rc=%d\n", rc);
 		goto out;
 	}
 	chip->nominal_capacity = temp[0];
-
-	chip->recharge_iterm_ma = QBG_DEFAULT_RECHARGE_ITERM_MA;
-	rc = of_property_read_u32(profile_node, "qcom,recharge-iterm-ma", &temp[0]);
-	if (!rc)
-		chip->recharge_iterm_ma = temp[0];
-
-	chip->recharge_soc = 100 - QBG_DEFAULT_RECHARGE_SOC_DELTA;
-	rc = of_property_read_u32(profile_node, "qcom,recharge-soc-delta", &temp[0]);
-	if (!rc)
-		chip->recharge_soc = 100 - temp[0];
-
-	chip->recharge_vflt_delta_mv = QBG_DEFAULT_RECHARGE_VFLT_DELTA;
-	rc = of_property_read_u32(profile_node, "qcom,recharge-vflt-delta", &temp[0]);
-	if (!rc)
-		chip->recharge_vflt_delta_mv = temp[0];
-
-	qbg_dbg(chip, QBG_DEBUG_SDAM, "Recharge SOC=% Recharge-Vflt=%duV Recharge-Ibat=%dmA\n",
-		chip->recharge_soc, chip->recharge_vflt_delta_mv, chip->recharge_iterm_ma);
 
 	rc = parse_step_chg_jeita_params(chip, profile_node);
 out:
@@ -1500,28 +1085,11 @@ static int qbg_get_battery_current(struct qti_qbg *chip, int *ibat_ua)
 	return 0;
 }
 
-static int qbg_get_battery_temp(struct qti_qbg *chip, int *temp)
-{
-	int rc;
-
-	if (!chip->batt_temp_chan)
-		return -EINVAL;
-
-	rc = iio_read_channel_processed(chip->batt_temp_chan, temp);
-	if (rc < 0) {
-		pr_err("Failed to read BATT_TEMP over ADC, rc=%d\n", rc);
-		return rc;
-	}
-	chip->tbat = *temp;
-
-	return 0;
-}
-
 #define TENTH_FACTOR	10
 static int qbg_get_charge_counter(struct qti_qbg *chip, int *charge_count)
 {
 
-	if (is_debug_batt_id(chip) || chip->battery_missing || chip->battery_unknown) {
+	if (is_debug_batt_id(chip) || chip->battery_missing) {
 		*charge_count = -EINVAL;
 		return 0;
 	}
@@ -1572,7 +1140,6 @@ static int qbg_setup_battery(struct qti_qbg *chip)
 	u8 ocv_boost_val = 0x02;
 
 	chip->profile_loaded = false;
-	chip->battery_unknown = false;
 
 	if (!is_battery_present(chip)) {
 		qbg_dbg(chip, QBG_DEBUG_PROFILE, "Battery Missing!\n");
@@ -1595,13 +1162,6 @@ static int qbg_setup_battery(struct qti_qbg *chip)
 			rc = qbg_sdam_write(chip,
 				QBG_SDAM_BASE(chip, SDAM_CTRL0) +
 				QBG_SDAM_BHARGER_OCV_HDRM_OFFSET, &ocv_boost_val, 1);
-		}
-
-		if (!strcmp(qbg_get_battery_type(chip), DEFAULT_BATT_TYPE)) {
-			chip->batt_type_str = DEFAULT_BATT_TYPE;
-			chip->battery_unknown = true;
-			chip->soc = BATT_MISSING_SOC;
-			rc = 0;
 		}
 	}
 
@@ -1771,7 +1331,7 @@ static int qbg_iio_read_raw(struct iio_dev *indio_dev,
 		rc = qbg_get_battery_capacity(chip, val1);
 		break;
 	case PSY_IIO_TEMP:
-		rc = qbg_get_battery_temp(chip, val1);
+		*val1 = chip->tbat;
 		break;
 	case PSY_IIO_VOLTAGE_MAX:
 		*val1 = chip->float_volt_uv;
@@ -1813,10 +1373,10 @@ static int qbg_iio_read_raw(struct iio_dev *indio_dev,
 		*val1 = chip->charge_cycle_count;
 		break;
 	case PSY_IIO_CHARGE_FULL:
-		*val1 = chip->learned_capacity * MILLI_TO_MICRO;
+		*val1 = chip->learned_capacity;
 		break;
 	case PSY_IIO_CHARGE_FULL_DESIGN:
-		*val1 = chip->nominal_capacity * MILLI_TO_MICRO;
+		*val1 = chip->nominal_capacity;
 		break;
 	default:
 		pr_err_ratelimited("Unsupported property %d\n", chan->channel);
@@ -1968,68 +1528,6 @@ static int qbg_get_sample_time_us(struct qti_qbg *chip)
 	return rc;
 }
 
-static ssize_t qbg_context_show(struct class *c,
-				struct class_attribute *attr, char *buf)
-{
-	struct qti_qbg *chip = container_of(c, struct qti_qbg, qbg_class);
-	int count;
-
-	if (!chip)
-		return -ENODEV;
-
-	if (!chip->context_count) {
-		qbg_dbg(chip, QBG_DEBUG_DEVICE, "Empty context buffer, nothing to show\n");
-		return 0;
-	}
-
-	mutex_lock(&chip->context_lock);
-	memcpy(buf, chip->context, chip->context_count);
-	count = chip->context_count;
-	chip->context_count = 0;
-	memset(chip->context, 0, QBG_CONTEXT_LOCAL_BUF_SIZE);
-	mutex_unlock(&chip->context_lock);
-
-	return count;
-}
-
-static ssize_t qbg_context_store(struct class *c,
-					struct class_attribute *attr,
-					const char *buf, size_t count)
-{
-	struct qti_qbg *chip = container_of(c, struct qti_qbg, qbg_class);
-
-	if (!chip)
-		return -ENODEV;
-
-	if (count > QBG_CONTEXT_LOCAL_BUF_SIZE) {
-		qbg_dbg(chip, QBG_DEBUG_DEVICE, "Context dump is greater than %d bytes\n",
-				QBG_CONTEXT_LOCAL_BUF_SIZE);
-		return -EINVAL;
-	}
-
-	if (!chip->context) {
-		chip->context = devm_kcalloc(chip->dev, 1,
-						QBG_CONTEXT_LOCAL_BUF_SIZE,
-						GFP_KERNEL);
-		if (!chip->context)
-			return -ENOMEM;
-	}
-
-	mutex_lock(&chip->context_lock);
-	memcpy(chip->context, buf, count);
-	chip->context_count = count;
-	mutex_unlock(&chip->context_lock);
-
-	return count;
-}
-static CLASS_ATTR_RW(qbg_context);
-
-static struct attribute *qbg_class_attrs[] = {
-	&class_attr_qbg_context.attr,
-	NULL,
-};
-ATTRIBUTE_GROUPS(qbg_class);
-
 static ssize_t qbg_device_read(struct file *file, char __user *buf, size_t count,
 			  loff_t *ppos)
 {
@@ -2109,7 +1607,6 @@ static ssize_t qbg_device_write(struct file *file, const char __user *buf,
 		goto fail;
 	}
 
-	__pm_stay_awake(chip->qbg_ws);
 	rc = data_size;
 	schedule_work(&chip->udata_work);
 
@@ -2328,15 +1825,14 @@ static int qbg_register_device(struct qti_qbg *chip)
 		goto unregister_chrdev;
 	}
 
-	chip->qbg_class.name = "qbg";
-	chip->qbg_class.class_groups = qbg_class_groups;
-	rc = class_register(&chip->qbg_class);
-	if (rc < 0) {
-		pr_err("Failed to create qbg_class rc=%d\n", rc);
+	chip->qbg_class = class_create(THIS_MODULE, "qbg");
+	if (IS_ERR_OR_NULL(chip->qbg_class)) {
+		pr_err("Failed to create qbg class\n");
+		rc = -EINVAL;
 		goto delete_cdev;
 	}
 
-	chip->qbg_device = device_create(&chip->qbg_class, NULL, chip->dev_no,
+	chip->qbg_device = device_create(chip->qbg_class, NULL, chip->dev_no,
 					NULL, "qbg");
 	if (IS_ERR(chip->qbg_device)) {
 		pr_err("Failed to create qbg_device\n");
@@ -2349,7 +1845,7 @@ static int qbg_register_device(struct qti_qbg *chip)
 	return 0;
 
 destroy_class:
-	class_unregister(&chip->qbg_class);
+	class_destroy(chip->qbg_class);
 delete_cdev:
 	cdev_del(&chip->qbg_cdev);
 unregister_chrdev:
@@ -2360,146 +1856,16 @@ unregister_chrdev:
 
 static int qbg_register_interrupts(struct qti_qbg *chip)
 {
-	int rc = 0;
-
-	/*
-	 * Do not register for data-full to skip processing QBG
-	 * data if a valid battery or debug battery is not detected
-	 */
-	if (chip->battery_unknown || is_debug_batt_id(chip))
-		return rc;
+	int rc;
 
 	rc = devm_request_threaded_irq(chip->dev, chip->irq, NULL,
 			qbg_data_full_irq_handler, IRQF_ONESHOT,
 			"qbg-sdam", chip);
-	if (rc < 0) {
-		dev_err(chip->dev, "Failed to request IRQ(qbg-sdam), rc=%d\n",
-			rc);
-		return rc;
-	}
-
-	rc = enable_irq_wake(chip->irq);
 	if (rc < 0)
-		dev_err(chip->dev, "Failed to set IRQ(qbg-sdam) wake-able, rc=%d\n",
+		dev_err(chip->dev, "Failed to request IRQ(qbg-sdam), rc=%d\n",
 			rc);
 
 	return rc;
-}
-
-#ifdef CONFIG_DEBUG_FS
-static ssize_t qbg_debug_mask_read(struct file *filp, char __user *buffer,
-		size_t count, loff_t *ppos)
-{
-	char *buf;
-	ssize_t len = 0;
-
-	if (*ppos != 0)
-		return 0;
-
-	buf = kasprintf(GFP_KERNEL, "%d\n", qbg_debug_mask);
-	if (!buf)
-		return -ENOMEM;
-
-	if (count < strlen(buf)) {
-		kfree(buf);
-		return -ENOSPC;
-	}
-
-	len = simple_read_from_buffer(buffer, count, ppos, buf, strlen(buf));
-	kfree(buf);
-
-	return len;
-}
-
-static ssize_t qbg_debug_mask_write(struct file *filp, const char __user *buffer,
-		size_t count, loff_t *ppos)
-{
-	struct qti_qbg *chip = filp->private_data;
-	int rc = 0;
-	char data[2];
-
-	rc = kstrtou32_from_user(buffer, count, 10, &qbg_debug_mask);
-	if (rc < 0)
-		return rc;
-
-	if (!chip->debug_mask_nvmem_low || !chip->debug_mask_nvmem_high)
-		return count;
-
-	data[0] = qbg_debug_mask & 0xff;
-	data[1] = (qbg_debug_mask >> 8) & 0xff;
-
-	rc = nvmem_cell_write(chip->debug_mask_nvmem_low, &data[0], sizeof(data[0]));
-	if (rc < 0) {
-		pr_err("Failed to write qbg debug mask low byte, rc = %d\n", rc);
-		return rc;
-	}
-
-	rc = nvmem_cell_write(chip->debug_mask_nvmem_high, &data[1], sizeof(data[1]));
-	if (rc < 0) {
-		pr_err("Failed to write qbg debug mask high byte, rc = %d\n", rc);
-		return rc;
-	}
-
-	return count;
-}
-
-static const struct file_operations qbg_debug_mask_fops = {
-	.owner = THIS_MODULE,
-	.open = simple_open,
-	.read = qbg_debug_mask_read,
-	.write = qbg_debug_mask_write,
-};
-
-static void qbg_create_debugfs(struct qti_qbg *chip)
-{
-	struct dentry *entry;
-
-	pr_err("%s:%u\n", __func__, __LINE__);
-	chip->dfs_root = debugfs_create_dir("qbg", NULL);
-	if (IS_ERR_OR_NULL(chip->dfs_root)) {
-		pr_err("Failed to create debugfs directory rc=%ld\n",
-				(long)chip->dfs_root);
-		return;
-	}
-
-	entry = debugfs_create_file("debug_mask", 0600, chip->dfs_root, chip,
-			&qbg_debug_mask_fops);
-	if (IS_ERR_OR_NULL(entry)) {
-		pr_err("Failed to create debug_mask rc=%ld\n", (long)entry);
-		debugfs_remove_recursive(chip->dfs_root);
-	}
-}
-#else
-static void qbg_create_debugfs(struct qti_qbg *chip)
-{
-}
-#endif
-
-static void get_qbg_debug_mask(struct qti_qbg *chip)
-{
-	ssize_t len;
-	char *data[2];
-
-	if (!chip->debug_mask_nvmem_low || !chip->debug_mask_nvmem_high)
-		return;
-
-	data[0] = nvmem_cell_read(chip->debug_mask_nvmem_low, &len);
-	if (IS_ERR(data[0])) {
-		pr_err("Failed to read qbg debug mask low byte from SDAM\n");
-		return;
-	}
-
-	data[1] = nvmem_cell_read(chip->debug_mask_nvmem_high, &len);
-	if (IS_ERR(data[1])) {
-		pr_err("Failed to read qbg debug mask high byte from SDAM\n");
-		return;
-	}
-
-	qbg_debug_mask = *data[1] & 0xff;
-	qbg_debug_mask = (qbg_debug_mask << 8) | (*data[0]);
-
-	kfree(data[0]);
-	kfree(data[1]);
 }
 
 static int qbg_parse_sdam_dt(struct qti_qbg *chip, struct device_node *node)
@@ -2545,18 +1911,6 @@ static int qbg_parse_dt(struct qti_qbg *chip)
 		return rc;
 	}
 
-	rc = of_property_read_u32(node, "qcom,adc-cmn-wb-base", &chip->adc_cmn_wb_base);
-	if (rc) {
-		pr_err("Failed to get adc cmn wb addr, rc=%d\n", rc);
-		return rc;
-	}
-
-	rc = of_property_read_u32(node, "qcom,adc-cmn-base", &chip->adc_cmn_base);
-	if (rc) {
-		pr_err("Failed to get adc cmn addr, rc=%d\n", rc);
-		return rc;
-	}
-
 	chip->vbat_cutoff_mv = QBG_DEFAULT_VBAT_CUTOFF_MV;
 	rc = of_property_read_u32(node, "qcom,vbat-cutoff-mv", &val);
 	if (!rc)
@@ -2582,35 +1936,6 @@ static int qbg_parse_dt(struct qti_qbg *chip)
 	if (!rc)
 		chip->rconn_mohm = val;
 
-	if (of_find_property(node, "nvmem-cells", NULL)) {
-		chip->debug_mask_nvmem_low = devm_nvmem_cell_get(chip->dev, "qbg_debug_mask_low");
-		if (IS_ERR(chip->debug_mask_nvmem_low)) {
-			rc = PTR_ERR(chip->debug_mask_nvmem_low);
-			if (rc != -EPROBE_DEFER)
-				dev_err(chip->dev, "Failed to get nvmem-cells, rc=%d\n", rc);
-			return rc;
-		}
-		chip->debug_mask_nvmem_high = devm_nvmem_cell_get(chip->dev, "qbg_debug_mask_high");
-		if (IS_ERR(chip->debug_mask_nvmem_high)) {
-			rc = PTR_ERR(chip->debug_mask_nvmem_high);
-			if (rc != -EPROBE_DEFER)
-				dev_err(chip->dev, "Failed to get nvmem-cells, rc=%d\n", rc);
-			return rc;
-		}
-
-		chip->skip_esr_state = devm_nvmem_cell_get(chip->dev, "skip_esr_state");
-		if (IS_ERR(chip->skip_esr_state)) {
-			rc = PTR_ERR(chip->skip_esr_state);
-			if (rc != -EPROBE_DEFER) {
-				dev_dbg(chip->dev, "Failed to get skip_esr_state, rc=%d\n", rc);
-				chip->skip_esr_state = NULL;
-				goto exit;
-			}
-			return rc;
-		}
-	}
-
-exit:
 	return 0;
 }
 
@@ -2629,13 +1954,6 @@ static int qti_qbg_probe(struct platform_device *pdev)
 	chip->dev = &pdev->dev;
 	chip->indio_dev = indio_dev;
 
-	chip->ext_iio_chans = devm_kcalloc(chip->dev,
-				ARRAY_SIZE(qbg_ext_iio_chan_name),
-				sizeof(*chip->ext_iio_chans),
-				GFP_KERNEL);
-	if (!chip->ext_iio_chans)
-		return -ENOMEM;
-
 	chip->regmap = dev_get_regmap(pdev->dev.parent, NULL);
 	if (!chip->regmap) {
 		dev_err(&pdev->dev, "Failed to get regmap\n");
@@ -2653,17 +1971,11 @@ static int qti_qbg_probe(struct platform_device *pdev)
 	INIT_WORK(&chip->udata_work, process_udata_work);
 	mutex_init(&chip->fifo_lock);
 	mutex_init(&chip->data_lock);
-	mutex_init(&chip->context_lock);
 	dev_set_drvdata(chip->dev, chip);
 	init_waitqueue_head(&chip->qbg_wait_q);
 
 	chip->debug_mask = &qbg_debug_mask;
 
-	chip->qbg_ws = wakeup_source_register(chip->dev, "qcom-qbg");
-	if (!chip->qbg_ws)
-		return -EINVAL;
-
-	chip->default_iterm_ma = -EINVAL;
 	chip->soc = INT_MIN;
 	chip->batt_soc = INT_MIN;
 	chip->sys_soc = INT_MIN;
@@ -2683,8 +1995,6 @@ static int qti_qbg_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Failed to parse QBG devicetree, rc=%d\n", rc);
 		return rc;
 	}
-
-	get_qbg_debug_mask(chip);
 
 	/* ADC for Battery-ID */
 	chip->batt_id_chan = devm_iio_channel_get(&pdev->dev, "batt-id");
@@ -2706,33 +2016,13 @@ static int qti_qbg_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	qbg_create_debugfs(chip);
-
 	chip->rtc = rtc_class_open(CONFIG_RTC_HCTOSYS_DEVICE);
 	if (chip->rtc == NULL)
 		return -EPROBE_DEFER;
 
-	rc = regmap_read(chip->regmap, REVID_REVISION4, &chip->rev4);
-	if (rc < 0) {
-		pr_err("Failed to read REVID_REVISION4, rc=%d\n", rc);
-		return rc;
-	}
-
 	rc = qbg_init_sdam(chip);
 	if (rc < 0) {
 		dev_err(&pdev->dev, "Failed to initialize QBG sdam, rc=%d\n", rc);
-		return rc;
-	}
-
-	rc = qbg_get_max_fifo_count(chip);
-	if (rc < 0) {
-		dev_err(&pdev->dev, "Failed to get fifo count, rc=%d\n", rc);
-		return rc;
-	}
-
-	rc = qbg_init_esr(chip);
-	if (rc < 0) {
-		dev_err(&pdev->dev, "Failed to initialize QBG ESR, rc=%d\n", rc);
 		return rc;
 	}
 
@@ -2788,67 +2078,11 @@ static int qti_qbg_remove(struct platform_device *pdev)
 	cancel_work_sync(&chip->udata_work);
 	mutex_destroy(&chip->fifo_lock);
 	mutex_destroy(&chip->data_lock);
-	mutex_destroy(&chip->context_lock);
 	cdev_del(&chip->qbg_cdev);
 	unregister_chrdev_region(chip->dev_no, 1);
-	class_unregister(&chip->qbg_class);
 
 	return 0;
 }
-
-static int qbg_freeze(struct device *dev)
-{
-	struct qti_qbg *chip = dev_get_drvdata(dev);
-	/*free irq*/
-	if (chip->irq > 0)
-		devm_free_irq(dev, chip->irq, chip);
-
-	return 0;
-}
-
-static int qbg_restore(struct device *dev)
-{
-	int ret = 0;
-	struct qti_qbg *chip = dev_get_drvdata(dev);
-
-	/* Init & clear SDAM to kick-start QBG sampling */
-	ret = qbg_init_sdam(chip);
-	if (ret < 0) {
-		dev_err(dev, "Failed to init qbg sdam rc = %d\n");
-		return ret;
-	}
-
-	ret = qbg_register_interrupts(chip);
-	if (ret < 0)
-		dev_err(dev, "Failed to register qbg interrupt rc = %d\n");
-
-	return ret;
-}
-
-static int qbg_suspend(struct device *dev)
-{
-#ifdef CONFIG_DEEPSLEEP
-	if (mem_sleep_current == PM_SUSPEND_MEM)
-		return qbg_freeze(dev);
-#endif
-	return 0;
-}
-
-static int qbg_resume(struct device *dev)
-{
-#ifdef CONFIG_DEEPSLEEP
-	if (mem_sleep_current == PM_SUSPEND_MEM)
-		return qbg_restore(dev);
-#endif
-	return 0;
-}
-
-static const struct dev_pm_ops qbg_pm_ops = {
-	.freeze = qbg_freeze,
-	.restore = qbg_restore,
-	.suspend = qbg_suspend,
-	.resume = qbg_resume,
-};
 
 static const struct of_device_id qbg_match_table[] = {
 	{ .compatible = "qcom,qbg", },
@@ -2859,7 +2093,6 @@ static struct platform_driver qti_qbg_driver = {
 	.driver = {
 		.name = "qti_qbg",
 		.of_match_table = qbg_match_table,
-		.pm = &qbg_pm_ops,
 	},
 	.probe = qti_qbg_probe,
 	.remove = qti_qbg_remove,
