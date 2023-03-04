@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"[hdcp-qseecom] %s: " fmt, __func__
@@ -541,15 +541,6 @@ struct __attribute__ ((__packed__)) hdcp_force_encryption_rsp {
 	uint32_t commandid;
 };
 
-static struct qseecom_handle *qseecom_handle_g;
-static struct qseecom_handle *hdcpsrm_qseecom_handle_g;
-static int hdcp2_app_started;
-static DEFINE_MUTEX(hdcp2_mutex_g);
-
-static struct qseecom_handle *hdcp1_qseecom_handle_g;
-static int hdcp1_app_started;
-static DEFINE_MUTEX(hdcp1_mutex_g);
-
 struct hdcp2_handle {
 	struct hdcp2_app_data app_data;
 	uint32_t tz_ctxhandle;
@@ -561,8 +552,6 @@ struct hdcp2_handle {
 	bool legacy_app;
 	uint32_t device_type;
 	char *app_name;
-	unsigned char *req_buf;
-	unsigned char *res_buf;
 
 	int (*app_init)(struct hdcp2_handle *handle);
 	int (*tx_init)(struct hdcp2_handle *handle);
@@ -587,7 +576,7 @@ static const char *hdcp_cmd_status_to_str(uint32_t err)
 {
 	int len = ARRAY_SIZE(HdcpErrors);
 
-	if (err < len)
+	if (err >= 0 && err < len)
 		return HdcpErrors[err];
 	else
 		return "";
@@ -774,29 +763,22 @@ static int hdcp2_app_load(struct hdcp2_handle *handle)
 		pr_err("%s app already loaded\n", handle->app_name);
 		goto error;
 	}
-	if (!qseecom_handle_g) {
-		rc = qseecom_start_app(&qseecom_handle_g,
-			 handle->app_name, QSEECOM_SBUFF_SIZE);
-		if (rc) {
-			pr_err("qseecom_start_app failed for HDCP2P2 (%d)\n", rc);
-			goto error;
-		}
+
+	rc = qseecom_start_app(&handle->qseecom_handle,
+		 handle->app_name, QSEECOM_SBUFF_SIZE);
+	if (rc) {
+		pr_err("qseecom_start_app failed for HDCP2P2 (%d)\n", rc);
+		goto error;
 	}
 
-	handle->qseecom_handle = qseecom_handle_g;
-
-	if (!hdcpsrm_qseecom_handle_g) {
-		rc = qseecom_start_app(&hdcpsrm_qseecom_handle_g,
-			 HDCPSRM_APP_NAME, QSEECOM_SBUFF_SIZE);
-		if (rc) {
-			pr_err("qseecom_start_app failed for HDCPSRM (%d)\n", rc);
-			goto hdcpsrm_error;
-		}
+	rc = qseecom_start_app(&handle->hdcpsrm_qseecom_handle,
+		 HDCPSRM_APP_NAME, QSEECOM_SBUFF_SIZE);
+	if (rc) {
+		pr_err("qseecom_start_app failed for HDCPSRM (%d)\n", rc);
+		goto hdcpsrm_error;
 	}
 
-	handle->hdcpsrm_qseecom_handle = hdcpsrm_qseecom_handle_g;
 	pr_debug("qseecom_start_app success\n");
-
 
 	rc = hdcp_get_version(handle);
 	if (rc) {
@@ -811,31 +793,20 @@ static int hdcp2_app_load(struct hdcp2_handle *handle)
 		handle->app_init = hdcp2_app_init;
 		handle->tx_init = hdcp2_app_tx_init;
 	}
-	if (!hdcp2_app_started) {
-		rc = handle->app_init(handle);
-		if (rc) {
-			pr_err("app init failed\n");
-			goto get_version_error;
-		}
-	}
 
-	hdcp2_app_started++;
+	rc = handle->app_init(handle);
+	if (rc) {
+		pr_err("app init failed\n");
+		goto get_version_error;
+	}
 
 	handle->hdcp_state |= HDCP_STATE_APP_LOADED;
-	return rc;
 
+	return rc;
 get_version_error:
-	if (!hdcp2_app_started) {
-		qseecom_shutdown_app(&hdcpsrm_qseecom_handle_g);
-		hdcpsrm_qseecom_handle_g = NULL;
-	}
-	handle->hdcpsrm_qseecom_handle = NULL;
+	qseecom_shutdown_app(&handle->hdcpsrm_qseecom_handle);
 hdcpsrm_error:
-	if (!hdcp2_app_started) {
-		qseecom_shutdown_app(&qseecom_handle_g);
-		qseecom_handle_g = NULL;
-	}
-	handle->qseecom_handle = NULL;
+	qseecom_shutdown_app(&handle->qseecom_handle);
 error:
 	return rc;
 }
@@ -846,34 +817,26 @@ static int hdcp2_app_unload(struct hdcp2_handle *handle)
 
 	hdcp2_app_init_var(deinit);
 
-	hdcp2_app_started--;
-	if (!hdcp2_app_started) {
+	hdcp2_app_process_cmd(deinit);
 
-		hdcp2_app_process_cmd(deinit);
-		/* deallocate the resources for qseecom HDCPSRM handle */
-		rc = qseecom_shutdown_app(&handle->hdcpsrm_qseecom_handle);
-		if (rc)
-			pr_err("qseecom_shutdown_app failed for HDCPSRM (%d)\n", rc);
+	/* deallocate the resources for qseecom HDCPSRM handle */
+	rc = qseecom_shutdown_app(&handle->hdcpsrm_qseecom_handle);
+	if (rc)
+		pr_err("qseecom_shutdown_app failed for HDCPSRM (%d)\n", rc);
 
-		hdcpsrm_qseecom_handle_g = NULL;
-		/* deallocate the resources for qseecom HDCP2P2 handle */
-		rc = qseecom_shutdown_app(&handle->qseecom_handle);
-		if (rc) {
-			pr_err("qseecom_shutdown_app failed for HDCP2P2 (%d)\n", rc);
-			return rc;
-		}
-		qseecom_handle_g = NULL;
+	/* deallocate the resources for qseecom HDCP2P2 handle */
+	rc = qseecom_shutdown_app(&handle->qseecom_handle);
+	if (rc) {
+		pr_err("qseecom_shutdown_app failed for HDCP2P2 (%d)\n", rc);
+		return rc;
 	}
-	handle->qseecom_handle = NULL;
-	handle->hdcpsrm_qseecom_handle = NULL;
 
 	handle->hdcp_state &= ~HDCP_STATE_APP_LOADED;
 	pr_debug("%s app unloaded\n", handle->app_name);
 
 	return rc;
 error:
-	if (!hdcp2_app_started)
-		qseecom_shutdown_app(&handle->hdcpsrm_qseecom_handle);
+	qseecom_shutdown_app(&handle->hdcpsrm_qseecom_handle);
 	return rc;
 }
 
@@ -913,7 +876,6 @@ bool hdcp2_feature_supported(void *data)
 		goto error;
 	}
 
-	mutex_lock(&hdcp2_mutex_g);
 	rc = hdcp2_app_load(handle);
 	if (!rc) {
 		if (!hdcp2_verify_key(handle)) {
@@ -923,7 +885,6 @@ bool hdcp2_feature_supported(void *data)
 		}
 		hdcp2_app_unload(handle);
 	}
-	mutex_unlock(&hdcp2_mutex_g);
 error:
 	return supported;
 }
@@ -1052,8 +1013,7 @@ static int hdcp2_app_start_auth(struct hdcp2_handle *handle)
 	if (rc)
 		goto error;
 
-	memcpy(handle->res_buf, rsp_buf->message, rsp_buf->msglen);
-
+	handle->app_data.response.data = rsp_buf->message;
 	handle->app_data.response.length = rsp_buf->msglen;
 	handle->app_data.timeout = rsp_buf->timeout;
 	handle->app_data.repeater_flag = false;
@@ -1125,8 +1085,6 @@ static int hdcp2_app_process_msg(struct hdcp2_handle *handle)
 	req_buf->msglen = handle->app_data.request.length;
 	req_buf->ctxhandle = handle->tz_ctxhandle;
 
-	memcpy(req_buf->msg, handle->req_buf, handle->app_data.request.length);
-
 	rc = hdcp2_app_process_cmd(rcvd_msg);
 	if (rc)
 		goto error;
@@ -1135,8 +1093,7 @@ static int hdcp2_app_process_msg(struct hdcp2_handle *handle)
 	if (rsp_buf->flag == HDCP_TXMTR_SUBSTATE_WAITING_FOR_RECIEVERID_LIST)
 		handle->app_data.repeater_flag = true;
 
-	memcpy(handle->res_buf, rsp_buf->msg, rsp_buf->msglen);
-
+	handle->app_data.response.data = rsp_buf->msg;
 	handle->app_data.response.length = rsp_buf->msglen;
 	handle->app_data.timeout = rsp_buf->timeout;
 error:
@@ -1153,8 +1110,7 @@ static int hdcp2_app_timeout(struct hdcp2_handle *handle)
 	if (rc)
 		goto error;
 
-	memcpy(handle->res_buf, rsp_buf->message, rsp_buf->msglen);
-
+	handle->app_data.response.data = rsp_buf->message;
 	handle->app_data.response.length = rsp_buf->msglen;
 	handle->app_data.timeout = rsp_buf->timeout;
 error:
@@ -1219,17 +1175,13 @@ int hdcp2_force_encryption(void *ctx, uint32_t enable)
 	}
 
 	handle = ctx;
-
-	mutex_lock(&hdcp2_mutex_g);
 	rc = hdcp2_force_encryption_utility(handle, enable);
 	if (rc)
 		goto error;
 
-	mutex_unlock(&hdcp2_mutex_g);
 	pr_debug("success\n");
 	return 0;
 error:
-	mutex_unlock(&hdcp2_mutex_g);
 	pr_err("failed, rc=%d\n", rc);
 	return rc;
 }
@@ -1247,12 +1199,19 @@ static int hdcp2_app_query_stream(struct hdcp2_handle *handle)
 	if (rc)
 		goto error;
 
-	memcpy(handle->res_buf, rsp_buf->msg, rsp_buf->msglen);
-
+	handle->app_data.response.data = rsp_buf->msg;
 	handle->app_data.response.length = rsp_buf->msglen;
 	handle->app_data.timeout = rsp_buf->timeout;
 error:
 	return rc;
+}
+
+static unsigned char *hdcp2_get_recv_buf(struct hdcp2_handle *handle)
+{
+	struct hdcp_rcvd_msg_req *req_buf;
+
+	req_buf = (struct hdcp_rcvd_msg_req *)(handle->qseecom_handle->sbuf);
+	return req_buf->msg;
 }
 
 int hdcp2_app_comm(void *ctx, enum hdcp2_app_cmd cmd,
@@ -1266,9 +1225,10 @@ int hdcp2_app_comm(void *ctx, enum hdcp2_app_cmd cmd,
 		return -EINVAL;
 	}
 
-	mutex_lock(&hdcp2_mutex_g);
 	handle = ctx;
 	handle->app_data.request.length = app_data->request.length;
+
+	pr_debug("command %s\n", hdcp2_app_cmd_str(cmd));
 
 	switch (cmd) {
 	case HDCP2_CMD_START:
@@ -1298,6 +1258,8 @@ int hdcp2_app_comm(void *ctx, enum hdcp2_app_cmd cmd,
 	if (rc)
 		goto error;
 
+	handle->app_data.request.data = hdcp2_get_recv_buf(handle);
+
 	app_data->request.data = handle->app_data.request.data;
 	app_data->request.length = handle->app_data.request.length;
 	app_data->response.data = handle->app_data.response.data;
@@ -1305,7 +1267,6 @@ int hdcp2_app_comm(void *ctx, enum hdcp2_app_cmd cmd,
 	app_data->timeout = handle->app_data.timeout;
 	app_data->repeater_flag = handle->app_data.repeater_flag;
 error:
-	mutex_unlock(&hdcp2_mutex_g);
 	return rc;
 }
 EXPORT_SYMBOL(hdcp2_app_comm);
@@ -1352,7 +1313,6 @@ int hdcp2_open_stream(void *ctx, uint8_t vc_payload_id, uint8_t stream_number,
 		uint32_t *stream_id)
 {
 	struct hdcp2_handle *handle = NULL;
-	int rc = 0;
 
 	if (!ctx) {
 		pr_err("invalid input\n");
@@ -1361,12 +1321,8 @@ int hdcp2_open_stream(void *ctx, uint8_t vc_payload_id, uint8_t stream_number,
 
 	handle = ctx;
 
-	mutex_lock(&hdcp2_mutex_g);
-	rc = hdcp2_open_stream_helper(handle, vc_payload_id, stream_number,
+	return hdcp2_open_stream_helper(handle, vc_payload_id, stream_number,
 		stream_id);
-	mutex_unlock(&hdcp2_mutex_g);
-
-	return rc;
 }
 EXPORT_SYMBOL(hdcp2_open_stream);
 
@@ -1405,7 +1361,6 @@ error:
 int hdcp2_close_stream(void *ctx, uint32_t stream_id)
 {
 	struct hdcp2_handle *handle = NULL;
-	int rc = 0;
 
 	if (!ctx) {
 		pr_err("invalid input\n");
@@ -1414,11 +1369,7 @@ int hdcp2_close_stream(void *ctx, uint32_t stream_id)
 
 	handle = ctx;
 
-	mutex_lock(&hdcp2_mutex_g);
-	rc = hdcp2_close_stream_helper(handle, stream_id);
-	mutex_unlock(&hdcp2_mutex_g);
-
-	return rc;
+	return hdcp2_close_stream_helper(handle, stream_id);
 }
 EXPORT_SYMBOL(hdcp2_close_stream);
 
@@ -1432,23 +1383,6 @@ void *hdcp2_init(u32 device_type)
 
 	handle->device_type = device_type;
 	handle->app_name = HDCP2P2_APP_NAME;
-
-	handle->res_buf = kmalloc(QSEECOM_SBUFF_SIZE, GFP_KERNEL);
-	if (!handle->res_buf) {
-		kzfree(handle);
-		return NULL;
-	}
-
-	handle->req_buf = kmalloc(QSEECOM_SBUFF_SIZE, GFP_KERNEL);
-	if (!handle->req_buf) {
-		kzfree(handle->res_buf);
-		kzfree(handle);
-		return NULL;
-	}
-
-	handle->app_data.request.data =  handle->req_buf;
-	handle->app_data.response.data = handle->res_buf;
-
 error:
 	return handle;
 }
@@ -1456,10 +1390,6 @@ EXPORT_SYMBOL(hdcp2_init);
 
 void hdcp2_deinit(void *ctx)
 {
-	struct hdcp2_handle *handle = ctx;
-
-	kzfree(handle->res_buf);
-	kzfree(handle->req_buf);
 	kzfree(ctx);
 }
 EXPORT_SYMBOL(hdcp2_deinit);
@@ -1589,16 +1519,12 @@ static int hdcp1_app_load(struct hdcp1_handle *handle)
 		goto error;
 	}
 
-	if (!hdcp1_qseecom_handle_g) {
-		rc = qseecom_start_app(&hdcp1_qseecom_handle_g, handle->app_name,
-				QSEECOM_SBUFF_SIZE);
-		if (rc) {
-			pr_err("%s app load failed (%d)\n", handle->app_name, rc);
-			goto error;
-		}
+	rc = qseecom_start_app(&handle->qseecom_handle, handle->app_name,
+			QSEECOM_SBUFF_SIZE);
+	if (rc) {
+		pr_err("%s app load failed (%d)\n", handle->app_name, rc);
+		goto error;
 	}
-	handle->qseecom_handle = hdcp1_qseecom_handle_g;
-	hdcp1_app_started++;
 
 	handle->hdcp_state |= HDCP_STATE_APP_LOADED;
 	pr_debug("%s app loaded\n", handle->app_name);
@@ -1620,17 +1546,13 @@ static void hdcp1_app_unload(struct hdcp1_handle *handle)
 		pr_warn("%s app not loaded\n", handle->app_name);
 		return;
 	}
-	hdcp1_app_started--;
-	if (!hdcp1_app_started) {
-		/* deallocate the resources for qseecom HDCP 1.x handle */
-		rc = qseecom_shutdown_app(&hdcp1_qseecom_handle_g);
-		if (rc) {
-			pr_err("%s app unload failed (%d)\n", handle->app_name, rc);
-			return;
-		}
-		hdcp1_qseecom_handle_g = NULL;
+
+	/* deallocate the resources for qseecom HDCP 1.x handle */
+	rc = qseecom_shutdown_app(&handle->qseecom_handle);
+	if (rc) {
+		pr_err("%s app unload failed (%d)\n", handle->app_name, rc);
+		return;
 	}
-	handle->qseecom_handle = NULL;
 
 	handle->hdcp_state &= ~HDCP_STATE_APP_LOADED;
 	pr_debug("%s app unloaded\n", handle->app_name);
@@ -1688,7 +1610,6 @@ bool hdcp1_feature_supported(void *data)
 	struct hdcp1_handle *handle = data;
 	int rc = 0;
 
-	mutex_lock(&hdcp1_mutex_g);
 	if (!handle) {
 		pr_err("invalid handle\n");
 		goto error;
@@ -1709,7 +1630,6 @@ bool hdcp1_feature_supported(void *data)
 		hdcp1_app_unload(handle);
 	}
 error:
-	mutex_unlock(&hdcp1_mutex_g);
 	return supported;
 }
 EXPORT_SYMBOL(hdcp1_feature_supported);
@@ -1739,7 +1659,6 @@ int hdcp1_set_enc(void *data, bool enable)
 
 	handle = hdcp1_handle->qseecom_handle;
 
-	mutex_lock(&hdcp1_mutex_g);
 	/* set keys and request aksv */
 	set_enc_req = (struct hdcp1_set_enc_req *)handle->sbuf;
 	set_enc_req->commandid = HDCP1_SET_ENC;
@@ -1755,18 +1674,15 @@ int hdcp1_set_enc(void *data, bool enable)
 
 	if (rc < 0) {
 		pr_err("qseecom cmd failed err=%d\n", rc);
-		mutex_unlock(&hdcp1_mutex_g);
 		return -EINVAL;
 	}
 
 	rc = set_enc_rsp->ret;
 	if (rc) {
 		pr_err("enc cmd failed, rsp=%d\n", set_enc_rsp->ret);
-		mutex_unlock(&hdcp1_mutex_g);
 		return -EINVAL;
 	}
 
-	mutex_unlock(&hdcp1_mutex_g);
 	pr_debug("success\n");
 	return 0;
 }
@@ -1800,23 +1716,19 @@ int hdcp1_start(void *data, u32 *aksv_msb, u32 *aksv_lsb)
 		goto error;
 	}
 
-	mutex_lock(&hdcp1_mutex_g);
 	rc = hdcp1_app_load(hdcp1_handle);
 	if (rc)
-		goto error_load;
+		goto error;
 
 	rc = hdcp1_set_key(hdcp1_handle, aksv_msb, aksv_lsb);
 	if (rc)
 		goto key_error;
 
-	mutex_unlock(&hdcp1_mutex_g);
 	pr_debug("success\n");
 	return rc;
 
 key_error:
 	hdcp1_app_unload(hdcp1_handle);
-error_load:
-	 mutex_unlock(&hdcp1_mutex_g);
 error:
 	return rc;
 }
@@ -1836,9 +1748,7 @@ void hdcp1_stop(void *data)
 		return;
 	}
 
-	mutex_lock(&hdcp1_mutex_g);
 	hdcp1_app_unload(hdcp1_handle);
-	mutex_unlock(&hdcp1_mutex_g);
 }
 EXPORT_SYMBOL(hdcp1_stop);
 
