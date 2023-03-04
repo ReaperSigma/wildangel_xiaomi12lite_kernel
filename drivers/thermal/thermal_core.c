@@ -246,14 +246,15 @@ int thermal_build_list_of_policies(char *buf)
 {
 	struct thermal_governor *pos;
 	ssize_t count = 0;
+	ssize_t size = PAGE_SIZE;
 
 	mutex_lock(&thermal_governor_lock);
 
 	list_for_each_entry(pos, &thermal_governor_list, governor_list) {
-		count += scnprintf(buf + count, PAGE_SIZE - count, "%s ",
-				   pos->name);
+		size = PAGE_SIZE - count;
+		count += scnprintf(buf + count, size, "%s ", pos->name);
 	}
-	count += scnprintf(buf + count, PAGE_SIZE - count, "\n");
+	count += scnprintf(buf + count, size, "\n");
 
 	mutex_unlock(&thermal_governor_lock);
 
@@ -571,8 +572,6 @@ static void thermal_zone_device_init(struct thermal_zone_device *tz)
 {
 	struct thermal_instance *pos;
 	tz->temperature = THERMAL_TEMP_INVALID;
-	tz->prev_low_trip = -INT_MAX;
-	tz->prev_high_trip = INT_MAX;
 	list_for_each_entry(pos, &tz->thermal_instances, tz_node)
 		pos->initialized = false;
 }
@@ -1557,7 +1556,7 @@ free_tz:
 EXPORT_SYMBOL_GPL(thermal_zone_device_register);
 
 /**
- * thermal_zone_device_unregister - removes the registered thermal zone device
+ * thermal_device_unregister - removes the registered thermal zone device
  * @tz: the thermal zone device to remove
  */
 void thermal_zone_device_unregister(struct thermal_zone_device *tz)
@@ -2140,9 +2139,18 @@ static int __init thermal_init(void)
 	if (result)
 		pr_warn("Thermal: Can not register suspend notifier, return %d\n",
 			result);
-#ifdef CONFIG_DEBUG_FS
 	thermal_debug_init();
-#endif
+
+	result = of_parse_thermal_message();
+	if (result)
+		pr_warn("Thermal: Can not parse thermal message node, return %d\n",
+			result);
+
+	result = create_thermal_message_node();
+	if (result)
+		pr_warn("Thermal: create thermal message node failed, return %d\n",
+			result);
+
 	return 0;
 
 unregister_class:
@@ -2168,9 +2176,7 @@ static void thermal_exit(void)
 	genetlink_exit();
 	destroy_thermal_message_node();
 	class_unregister(&thermal_class);
-#ifdef CONFIG_DEBUG_FS
 	thermal_debug_exit();
-#endif
 	thermal_unregister_governors();
 	ida_destroy(&thermal_tz_ida);
 	ida_destroy(&thermal_cdev_ida);
