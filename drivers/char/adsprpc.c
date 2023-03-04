@@ -670,6 +670,7 @@ struct fastrpc_file {
 	/* Flag to indicate dynamic process creation status*/
 	enum fastrpc_process_create_state dsp_process_state;
 	struct completion shutdown;
+	bool in_process_create;
 };
 
 static struct fastrpc_apps gfa;
