@@ -1197,7 +1197,7 @@ void psi_trigger_destroy(struct psi_trigger *t)
 __poll_t psi_trigger_poll(void **trigger_ptr,
 				struct file *file, poll_table *wait)
 {
-	/*__poll_t ret = DEFAULT_POLLMASK;
+	__poll_t ret = DEFAULT_POLLMASK;
 	struct psi_trigger *t;
 
 	if (static_branch_likely(&psi_disabled))
