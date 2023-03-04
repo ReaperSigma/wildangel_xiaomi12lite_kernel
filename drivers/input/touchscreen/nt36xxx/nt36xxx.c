@@ -2577,7 +2577,6 @@ static int32_t nvt_ts_late_probe_tvm(struct i2c_client *client,
 			return ret;
 		}
 		atomic_set(&ts->delayed_vm_probe_pending, 1);
-		return ret;
 	}
 
 	NVT_ERR("irq:%d\n", ts->client->irq);
