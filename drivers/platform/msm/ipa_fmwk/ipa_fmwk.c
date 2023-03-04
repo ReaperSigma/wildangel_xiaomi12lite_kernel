@@ -2578,29 +2578,6 @@ enum ipa_client_type ipa_eth_get_ipa_client_type_from_eth_type(
 }
 EXPORT_SYMBOL(ipa_eth_get_ipa_client_type_from_eth_type);
 
-bool ipa_eth_client_exist(
-	enum ipa_eth_client_type eth_client_type, int inst_id)
-{
-	int ret;
-
-	IPA_FMWK_DISPATCH_RETURN_DP(ipa_eth_client_exist,
-		eth_client_type, inst_id);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_eth_client_exist);
-
-enum ipa_client_type ipa_eth_get_ipa_client_type_from_eth_type(
-	enum ipa_eth_client_type eth_client_type, enum ipa_eth_pipe_direction dir)
-{
-	int ret;
-
-	IPA_FMWK_DISPATCH_RETURN_DP(ipa_eth_get_ipa_client_type_from_eth_type,
-		eth_client_type, dir);
-
-	return ret;
-}
-EXPORT_SYMBOL(ipa_eth_get_ipa_client_type_from_eth_type);
 
 bool ipa_eth_client_exist(
 	enum ipa_eth_client_type eth_client_type, int inst_id)
