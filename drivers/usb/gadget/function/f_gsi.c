@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -48,22 +47,6 @@ static inline bool usb_gsi_remote_wakeup_allowed(struct usb_function *f)
 	log_event_dbg("%s: remote_wakeup_allowed:%s", __func__,
 			(remote_wakeup_allowed ? "true" : "false"));
 	return remote_wakeup_allowed;
-}
-
-static void ipa_ready_callback(void *user_data)
-{
-	struct f_gsi *gsi = user_data;
-
-	log_event_info("%s: ipa is ready\n", __func__);
-
-	/*
-	 * If ipa_ready_timeout is set then don't mark ipa_ready as true since this
-	 * callback can come even after timeout.
-	 */
-	if (!gsi->ipa_ready_timeout) {
-		gsi->d_port.ipa_ready = true;
-		wake_up_interruptible(&gsi->d_port.wait_for_ipa_ready);
-	}
 }
 
 static void post_event(struct gsi_data_port *port, u8 event)
@@ -553,13 +536,9 @@ static int ipa_connect_channels(struct gsi_data_port *d_port)
 			GSI_EP_OP_GET_CH_INFO);
 
 	log_event_dbg("%s: USB GSI IN OPS Completed", __func__);
-
-	if (gsi->prot_id != IPA_USB_DIAG)
-		in_params->client = (gsi->prot_id != IPA_USB_RMNET_CV2X) ?
-			IPA_CLIENT_USB_CONS : IPA_CLIENT_USB2_CONS;
-	else
-		in_params->client = IPA_CLIENT_USB_DPL_CONS;
-
+	in_params->client =
+		(gsi->prot_id != IPA_USB_DIAG) ? IPA_CLIENT_USB_CONS :
+						IPA_CLIENT_USB_DPL_CONS;
 	in_params->ipa_ep_cfg.mode.mode = IPA_BASIC;
 	in_params->teth_prot = gsi->prot_id;
 	in_params->gevntcount_low_addr =
@@ -614,8 +593,7 @@ static int ipa_connect_channels(struct gsi_data_port *d_port)
 		usb_gsi_ep_op(d_port->out_ep, (void *)&gsi_channel_info,
 				GSI_EP_OP_GET_CH_INFO);
 		log_event_dbg("%s: USB GSI OUT OPS Completed", __func__);
-		out_params->client = (gsi->prot_id != IPA_USB_RMNET_CV2X)
-			? IPA_CLIENT_USB_PROD : IPA_CLIENT_USB2_PROD;
+		out_params->client = IPA_CLIENT_USB_PROD;
 		out_params->ipa_ep_cfg.mode.mode = IPA_BASIC;
 		out_params->teth_prot = gsi->prot_id;
 		out_params->gevntcount_low_addr =
@@ -674,22 +652,6 @@ static int ipa_connect_channels(struct gsi_data_port *d_port)
 				sizeof(ipa_in_channel_out_params));
 	memset(&ipa_out_channel_out_params, 0x0,
 				sizeof(ipa_out_channel_out_params));
-
-	gsi->ipa_ready_timeout = false;
-	ret = ipa_register_ipa_ready_cb(ipa_ready_callback, gsi);
-	if (!ret) {
-		log_event_info("%s: ipa is not ready", __func__);
-		ret = wait_event_interruptible_timeout(
-			gsi->d_port.wait_for_ipa_ready, gsi->d_port.ipa_ready,
-			msecs_to_jiffies(GSI_IPA_READY_TIMEOUT));
-		if (!ret) {
-			log_event_err("%s: ipa ready timeout", __func__);
-			gsi->ipa_ready_timeout = true;
-			ret = -ETIMEDOUT;
-			goto end_xfer_ep_out;
-		}
-		gsi->d_port.ipa_ready = false;
-	}
 
 	log_event_dbg("%s: Calling xdci_connect", __func__);
 	ret = ipa_usb_xdci_connect(out_params, in_params,
@@ -1610,8 +1572,7 @@ static long gsi_ctrl_dev_ioctl(struct file *fp, unsigned int cmd,
 	case QTI_CTRL_GET_LINE_STATE:
 	case GSI_MBIM_GPS_USB_STATUS:
 		val = atomic_read(&gsi->connected);
-		if (gsi->prot_id == IPA_USB_RMNET ||
-				gsi->prot_id == IPA_USB_RMNET_CV2X)
+		if (gsi->prot_id == IPA_USB_RMNET)
 			val = gsi->rmnet_dtr_status;
 
 		ret = copy_to_user((void __user *)arg, &val, sizeof(val));
@@ -1830,8 +1791,6 @@ static int gsi_function_ctrl_port_init(struct f_gsi *gsi)
 
 	if (gsi->prot_id == IPA_USB_RMNET)
 		strlcat(gsi->c_port.name, GSI_RMNET_CTRL_NAME, sz);
-	else if (gsi->prot_id == IPA_USB_RMNET_CV2X)
-		strlcat(gsi->c_port.name, GSI_RMNET_V2X_CTRL_NAME, sz);
 	else if (gsi->prot_id == IPA_USB_MBIM)
 		strlcat(gsi->c_port.name, GSI_MBIM_CTRL_NAME, sz);
 	else if (gsi->prot_id == IPA_USB_DIAG)
@@ -2259,12 +2218,8 @@ invalid:
 static void gsi_ctrl_cmd_complete(struct usb_ep *ep, struct usb_request *req)
 {
 	struct f_gsi *gsi = req->context;
-	struct usb_composite_dev *cdev;
+	struct usb_composite_dev *cdev = gsi->function.config->cdev;
 
-	if (!gsi->function.config)
-		return;
-
-	cdev = gsi->function.config->cdev;
 	gsi_ctrl_send_cpkt_tomodem(gsi, req->buf, req->actual);
 	cdev->setup_pending = false;
 }
@@ -2404,8 +2359,7 @@ gsi_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 	case ((USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE) << 8)
 			| USB_CDC_REQ_SET_CONTROL_LINE_STATE:
 		line_state = (w_value & GSI_CTRL_DTR ? true : false);
-		if (gsi->prot_id == IPA_USB_RMNET ||
-				gsi->prot_id == IPA_USB_RMNET_CV2X)
+		if (gsi->prot_id == IPA_USB_RMNET)
 			gsi->rmnet_dtr_status = line_state;
 		log_event_dbg("%s: USB_CDC_REQ_SET_CONTROL_LINE_STATE DTR:%d\n",
 						__func__, line_state);
@@ -2510,7 +2464,6 @@ static int gsi_get_alt(struct usb_function *f, unsigned int intf)
 	/* RNDIS, RMNET and DPL only support alt 0*/
 	if (intf == gsi->ctrl_id || gsi->prot_id == IPA_USB_RNDIS ||
 			gsi->prot_id == IPA_USB_RMNET ||
-			gsi->prot_id == IPA_USB_RMNET_CV2X ||
 			gsi->prot_id == IPA_USB_DIAG)
 		return 0;
 	else if (intf == gsi->data_id)
@@ -2530,8 +2483,7 @@ static int gsi_set_alt(struct usb_function *f, unsigned int intf,
 	log_event_dbg("intf=%u, alt=%u", intf, alt);
 
 	/* Control interface has only altsetting 0 */
-	if (intf == gsi->ctrl_id || gsi->prot_id == IPA_USB_RMNET ||
-			gsi->prot_id == IPA_USB_RMNET_CV2X) {
+	if (intf == gsi->ctrl_id || gsi->prot_id == IPA_USB_RMNET) {
 		if (alt != 0)
 			goto fail;
 
@@ -2567,9 +2519,13 @@ static int gsi_set_alt(struct usb_function *f, unsigned int intf,
 		/* for rndis and rmnet alt is always 0 update alt accordingly */
 		if (gsi->prot_id == IPA_USB_RNDIS ||
 				gsi->prot_id == IPA_USB_RMNET ||
-				gsi->prot_id == IPA_USB_RMNET_CV2X ||
-				gsi->prot_id == IPA_USB_DIAG)
+				gsi->prot_id == IPA_USB_DIAG) {
+			if (gsi->d_port.in_ep &&
+				!gsi->d_port.in_ep->driver_data)
 				alt = 1;
+			else
+				alt = 0;
+		}
 
 		if (alt > 1)
 			goto notify_ep_disable;
@@ -2581,13 +2537,15 @@ static int gsi_set_alt(struct usb_function *f, unsigned int intf,
 			gsi->d_port.ntb_info.ntb_input_size =
 				MBIM_NTB_DEFAULT_IN_SIZE;
 		if (alt == 1) {
-			if (gsi->d_port.in_ep)
-				usb_gsi_ep_op(gsi->d_port.in_ep, &gsi->d_port.in_request,
-						GSI_DYNAMIC_EP_INTR_CALC);
+			if (gsi->d_port.in_ep) {
+				if (gsi->prot_id == IPA_USB_DIAG)
+					gsi->d_port.in_request.ep_intr_num = 3;
+				else
+					gsi->d_port.in_request.ep_intr_num = 2;
+			}
 
 			if (gsi->d_port.out_ep)
-				usb_gsi_ep_op(gsi->d_port.out_ep, &gsi->d_port.out_request,
-						GSI_DYNAMIC_EP_INTR_CALC);
+				gsi->d_port.out_request.ep_intr_num = 1;
 
 			gsi->d_port.gadget = cdev->gadget;
 			gsi->d_port.cdev = cdev;
@@ -2667,8 +2625,7 @@ static void gsi_disable(struct usb_function *f)
 	if (gsi->prot_id == IPA_USB_RNDIS)
 		rndis_uninit(gsi->params);
 
-	if (gsi->prot_id == IPA_USB_RMNET ||
-		gsi->prot_id == IPA_USB_RMNET_CV2X)
+	if (gsi->prot_id == IPA_USB_RMNET)
 		gsi->rmnet_dtr_status = false;
 
 	/* Disable Control Path */
@@ -2915,7 +2872,7 @@ static int gsi_update_function_bind_params(struct f_gsi *gsi,
 		info->data_nop_desc->bInterfaceNumber = gsi->data_id;
 
 	/* allocate instance-specific endpoints */
-	if (info->fs_in_desc && gsi->prot_id <= IPA_USB_RMNET_CV2X) {
+	if (info->fs_in_desc) {
 		ep = usb_ep_autoconfig_by_name(cdev->gadget,
 				info->fs_in_desc, info->in_epname);
 		if (!ep)
@@ -2925,7 +2882,7 @@ static int gsi_update_function_bind_params(struct f_gsi *gsi,
 		ep->driver_data = cdev;	/* claim */
 	}
 
-	if (info->fs_out_desc && gsi->prot_id <= IPA_USB_RMNET_CV2X) {
+	if (info->fs_out_desc) {
 		ep = usb_ep_autoconfig_by_name(cdev->gadget,
 				info->fs_out_desc, info->out_epname);
 		if (!ep)
@@ -3023,6 +2980,16 @@ fail:
 	return -ENOMEM;
 }
 
+static void ipa_ready_callback(void *user_data)
+{
+	struct f_gsi *gsi = user_data;
+
+	log_event_info("%s: ipa is ready\n", __func__);
+
+	gsi->d_port.ipa_ready = true;
+	wake_up_interruptible(&gsi->d_port.wait_for_ipa_ready);
+}
+
 static void gsi_get_ether_addr(const char *str, u8 *dev_addr)
 {
 	if (str) {
@@ -3067,7 +3034,6 @@ static int gsi_bind(struct usb_configuration *c, struct usb_function *f)
 
 
 	if (gsi->prot_id == IPA_USB_RMNET ||
-		gsi->prot_id == IPA_USB_RMNET_CV2X ||
 		gsi->prot_id == IPA_USB_DIAG)
 		gsi->ctrl_id = -ENODEV;
 	else {
@@ -3273,7 +3239,6 @@ static int gsi_bind(struct usb_configuration *c, struct usb_function *f)
 		}
 		break;
 	case IPA_USB_RMNET:
-	case IPA_USB_RMNET_CV2X:
 		info.string_defs = rmnet_gsi_string_defs;
 		info.data_desc = &rmnet_gsi_interface_desc;
 		info.data_str_idx = 0;
@@ -3393,7 +3358,6 @@ static int gsi_bind(struct usb_configuration *c, struct usb_function *f)
 	if (gsi->prot_id == IPA_USB_GPS)
 		goto skip_ipa_init;
 
-	gsi->ipa_ready_timeout = false;
 	status = ipa_register_ipa_ready_cb(ipa_ready_callback, gsi);
 	if (!status) {
 		log_event_info("%s: ipa is not ready", __func__);
@@ -3402,11 +3366,9 @@ static int gsi_bind(struct usb_configuration *c, struct usb_function *f)
 			msecs_to_jiffies(GSI_IPA_READY_TIMEOUT));
 		if (!status) {
 			log_event_err("%s: ipa ready timeout", __func__);
-			gsi->ipa_ready_timeout = true;
 			status = -ETIMEDOUT;
 			goto dereg_rndis;
 		}
-		gsi->d_port.ipa_ready = false;
 	}
 
 	gsi->d_port.ipa_usb_notify_cb = ipa_usb_notify_cb;
@@ -3510,7 +3472,6 @@ static int gsi_bind_config(struct f_gsi *gsi)
 		gsi->function.strings = ecm_gsi_strings;
 		break;
 	case IPA_USB_RMNET:
-	case IPA_USB_RMNET_CV2X:
 		gsi->function.name = "rmnet";
 		gsi->function.strings = rmnet_gsi_strings;
 		break;
@@ -4020,7 +3981,7 @@ static void gsi_free_inst(struct usb_function_instance *f)
 	}
 
 	ipc_log_context_destroy(opts->gsi->ipc_log_ctxt);
-	if (opts->interf_group)
+	if (opts && opts->interf_group)
 		kfree(opts->interf_group);
 	/* Clear instance status */
 	gsi_inst_clean(opts);
@@ -4079,7 +4040,6 @@ static int usb_gsi_uevent(struct device *dev, struct kobj_uevent_env *env)
 
 	switch (gsi->prot_id) {
 	case IPA_USB_RMNET:
-	case IPA_USB_RMNET_CV2X:
 		str = gsi->rmnet_dtr_status ? "connected" : "disconnected";
 		break;
 	case IPA_USB_MBIM:
