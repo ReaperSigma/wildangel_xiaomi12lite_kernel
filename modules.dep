@@ -1,0 +1,22 @@
+/lib/modules/llcc_perfmon.ko:
+/lib/modules/rdbg.ko:
+/lib/modules/nfc_i2c.ko:
+/lib/modules/usbdtp.ko:
+/lib/modules/usb_f_dtp.ko:
+/lib/modules/xiaomi_touch.ko:
+/lib/modules/goodix_core.ko: /lib/modules/xiaomi_touch.ko /lib/modules/msm_drm.ko
+/lib/modules/focaltech_touch.ko: /lib/modules/xiaomi_touch.ko /lib/modules/msm_drm.ko
+/lib/modules/goodix_fod.ko:
+/lib/modules/ir-spi.ko:
+/lib/modules/radio-i2c-rtc6226-qca.ko:
+/lib/modules/qti_battery_charger_main_odin.ko: /lib/modules/msm_drm.ko
+/lib/modules/mi_thermal_interface.ko: /lib/modules/msm_drm.ko
+/lib/modules/btpower.ko:
+/lib/modules/bt_fm_slim.ko: /lib/modules/btpower.ko /lib/modules/slimbus.ko
+/lib/modules/leds-qti-flash.ko: /lib/modules/qti_battery_charger_main_odin.ko /lib/modules/msm_drm.ko
+/lib/modules/hid-aksys.ko:
+/lib/modules/qca_cld3_wlan.ko:
+/lib/modules/slimbus.ko:
+/lib/modules/slimbus-ngd.ko: /lib/modules/slimbus.ko
+/lib/modules/camera.ko: /lib/modules/leds-qti-flash.ko /lib/modules/qti_battery_charger_main_odin.ko /lib/modules/msm_drm.ko
+/lib/modules/msm_drm.ko:
